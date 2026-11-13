@@ -1,0 +1,2805 @@
+'use strict';
+
+/* =========================================================================
+   Bullseye Range — first-person shooting gallery
+   You hold an AK-47 (30-round magazine, full-auto while the trigger is held);
+   knock the targets down and drop the flags to advance.
+   ========================================================================= */
+
+/* ---------------- error surface (visible instead of a silent blank page) -- */
+function showError(msg) {
+  const box = document.getElementById('err');
+  if (!box) return;
+  box.hidden = false;
+  const text = String(msg).slice(0, 400);
+  if (box.textContent.indexOf(text) === -1) box.textContent += (box.textContent ? '\n' : '') + text;
+}
+window.addEventListener('error', e => showError(e.message + ' @ ' + (e.filename || '?') + ':' + (e.lineno || 0)));
+window.addEventListener('unhandledrejection', e => {
+  const r = e.reason;
+  showError('promise: ' + (r && r.message ? r.message : String(r)));
+});
+
+/* ---------------- canvas ---------------- */
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+let W = 1, H = 1;
+
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  W = Math.max(320, window.innerWidth);
+  H = Math.max(240, window.innerHeight);
+  canvas.width = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener('resize', resize);
+resize();
+
+/* ---------------- helpers ---------------- */
+const TAU = Math.PI * 2;
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+const rand = (a, b) => a + Math.random() * (b - a);
+const randInt = (a, b) => Math.floor(rand(a, b + 1));
+const lerp = (a, b, t) => a + (b - a) * t;
+const damp = (a, b, rate, dt) => lerp(a, b, 1 - Math.exp(-rate * dt));
+const easeInQuad = t => t * t;
+const easeInOut = t => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
+const fmt = n => Math.round(n).toLocaleString('en-US');
+
+/* ---------------- sound (tiny WebAudio synth, no assets) ---------------- */
+const Sound = (function () {
+  let ac = null, master = null, noiseBuf = null, usable = true;
+
+  function ensure() {
+    if (!usable) return false;
+    if (!ac) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) { usable = false; return false; }
+      try { ac = new AC(); } catch (err) { usable = false; return false; }
+      master = ac.createGain();
+      master.gain.value = 0.5;
+      master.connect(ac.destination);
+    }
+    if (ac.state === 'suspended') ac.resume();
+    return true;
+  }
+
+  function noise(dur) {
+    if (!noiseBuf || noiseBuf.__dur < dur) {
+      const len = Math.ceil(ac.sampleRate * dur);
+      const buf = ac.createBuffer(1, len, ac.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      buf.__dur = dur;
+      noiseBuf = buf;
+    }
+    const src = ac.createBufferSource();
+    src.buffer = noiseBuf;
+    return src;
+  }
+
+  function beep(freq, at, dur, peak, type) {
+    const o = ac.createOscillator();
+    o.type = type || 'triangle';
+    o.frequency.setValueAtTime(freq, at);
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.0001, at);
+    g.gain.exponentialRampToValueAtTime(peak, at + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+    o.connect(g); g.connect(master);
+    o.start(at); o.stop(at + dur + 0.02);
+  }
+
+  function shot() {
+    if (!ensure()) return;
+    const t = ac.currentTime;
+    const src = noise(0.3);
+    const lp = ac.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(2700, t);
+    lp.frequency.exponentialRampToValueAtTime(170, t + 0.2);
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.9, t);
+    g.gain.exponentialRampToValueAtTime(0.0008, t + 0.2);
+    src.connect(lp); lp.connect(g); g.connect(master);
+    src.start(t); src.stop(t + 0.26);
+    const o = ac.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(150, t);
+    o.frequency.exponentialRampToValueAtTime(42, t + 0.15);
+    const g2 = ac.createGain();
+    g2.gain.setValueAtTime(0.52, t);
+    g2.gain.exponentialRampToValueAtTime(0.0008, t + 0.17);
+    o.connect(g2); g2.connect(master);
+    o.start(t); o.stop(t + 0.19);
+  }
+
+  function boom() {                       // shotgun: deeper, longer, more body than shot()
+    if (!ensure()) return;
+    const t = ac.currentTime;
+    const src = noise(0.45);
+    const lp = ac.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(1900, t);
+    lp.frequency.exponentialRampToValueAtTime(90, t + 0.34);
+    const g = ac.createGain();
+    g.gain.setValueAtTime(1.0, t);
+    g.gain.exponentialRampToValueAtTime(0.0008, t + 0.34);
+    src.connect(lp); lp.connect(g); g.connect(master);
+    src.start(t); src.stop(t + 0.42);
+    const o = ac.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(112, t);
+    o.frequency.exponentialRampToValueAtTime(30, t + 0.26);
+    const g2 = ac.createGain();
+    g2.gain.setValueAtTime(0.72, t);
+    g2.gain.exponentialRampToValueAtTime(0.0008, t + 0.3);
+    o.connect(g2); g2.connect(master);
+    o.start(t); o.stop(t + 0.32);
+  }
+
+  function pick() {                       // weapon change: two metallic clacks
+    click(900, 0, 0.5, 0.04);
+    click(1500, 0.06, 0.45, 0.03);
+  }
+
+  function hit() {
+    if (!ensure()) return;
+    const t = ac.currentTime;
+    beep(1046, t, 0.18, 0.3, 'triangle');
+    beep(1568, t + 0.07, 0.2, 0.26, 'triangle');
+  }
+
+  function flagHit() {
+    if (!ensure()) return;
+    const t = ac.currentTime;
+    const src = noise(0.25);
+    const bp = ac.createBiquadFilter();
+    bp.type = 'bandpass'; bp.frequency.value = 780; bp.Q.value = 1.1;
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.45, t);
+    g.gain.exponentialRampToValueAtTime(0.0008, t + 0.26);
+    src.connect(bp); bp.connect(g); g.connect(master);
+    src.start(t); src.stop(t + 0.26);
+    const o = ac.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(430, t);
+    o.frequency.exponentialRampToValueAtTime(170, t + 0.28);
+    const g2 = ac.createGain();
+    g2.gain.setValueAtTime(0.24, t);
+    g2.gain.exponentialRampToValueAtTime(0.0008, t + 0.3);
+    o.connect(g2); g2.connect(master);
+    o.start(t); o.stop(t + 0.32);
+  }
+
+  function click(freq, at, peak, dur) {
+    if (!ensure()) return;
+    const t = at === undefined ? ac.currentTime : ac.currentTime + at;
+    const src = noise(dur || 0.05);
+    const hp = ac.createBiquadFilter();
+    hp.type = 'highpass'; hp.frequency.value = freq;
+    const g = ac.createGain();
+    g.gain.setValueAtTime(peak || 0.3, t);
+    g.gain.exponentialRampToValueAtTime(0.0008, t + (dur || 0.05));
+    src.connect(hp); hp.connect(g); g.connect(master);
+    src.start(t); src.stop(t + (dur || 0.05) + 0.02);
+  }
+
+  function emptyClick() { click(1600, 0, 0.3, 0.04); }
+  function reloadMech() { click(1400, 0, 0.35, 0.06); click(2200, 0.16, 0.3, 0.05); }
+  function levelUp() {
+    if (!ensure()) return;
+    const t = ac.currentTime;
+    [523, 659, 784, 1046].forEach((f, i) => beep(f, t + i * 0.09, 0.3, 0.24, 'sine'));
+  }
+  function gameStart() {
+    if (!ensure()) return;
+    const t = ac.currentTime;
+    [392, 587].forEach((f, i) => beep(f, t + i * 0.1, 0.32, 0.22, 'sine'));
+  }
+
+  function enemyShot() {                  // a pistol far down the range
+    if (!ensure()) return;
+    const t = ac.currentTime;
+    const src = noise(0.16);
+    const lp = ac.createBiquadFilter();
+    lp.type = 'lowpass'; lp.frequency.value = 1500;
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.34, t);
+    g.gain.exponentialRampToValueAtTime(0.0008, t + 0.17);
+    src.connect(lp); lp.connect(g); g.connect(master);
+    src.start(t); src.stop(t + 0.2);
+  }
+
+  function deflect() {                    // steel rings, a round bounces off the blade
+    if (!ensure()) return;
+    const t = ac.currentTime;
+    [2350, 3170, 4200].forEach((f, i) => beep(f, t + i * 0.012, 0.34 - i * 0.06, 0.2, 'triangle'));
+    click(2600, 0.02, 0.3, 0.05);
+  }
+
+  function slice() {                      // steel through a flying round
+    if (!ensure()) return;
+    const t = ac.currentTime;
+    const src = noise(0.1);                            // a short hiss off the edge
+    const hp = ac.createBiquadFilter();
+    hp.type = 'highpass'; hp.frequency.value = 2200;
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.3, t);
+    g.gain.exponentialRampToValueAtTime(0.0008, t + 0.11);
+    src.connect(hp); hp.connect(g); g.connect(master);
+    src.start(t); src.stop(t + 0.12);
+    [2400, 3300, 4600].forEach((f, i) => beep(f, t + i * 0.008, 0.30 - i * 0.06, 0.16, 'triangle'));
+  }
+
+  function slash() {                      // katana cutting the air
+    if (!ensure()) return;
+    const t = ac.currentTime;
+    const src = noise(0.3);
+    const bp = ac.createBiquadFilter();
+    bp.type = 'bandpass'; bp.frequency.setValueAtTime(3400, t);
+    bp.frequency.exponentialRampToValueAtTime(700, t + 0.26);
+    bp.Q.value = 1.4;
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.3, t);
+    g.gain.exponentialRampToValueAtTime(0.0008, t + 0.28);
+    src.connect(bp); bp.connect(g); g.connect(master);
+    src.start(t); src.stop(t + 0.3);
+  }
+
+  function hurt() {                       // a round finding you
+    if (!ensure()) return;
+    const t = ac.currentTime;
+    const src = noise(0.22);
+    const lp = ac.createBiquadFilter();
+    lp.type = 'lowpass'; lp.frequency.value = 900;
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.5, t);
+    g.gain.exponentialRampToValueAtTime(0.0008, t + 0.24);
+    src.connect(lp); lp.connect(g); g.connect(master);
+    src.start(t); src.stop(t + 0.26);
+    const o = ac.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(220, t);
+    o.frequency.exponentialRampToValueAtTime(80, t + 0.3);
+    const g2 = ac.createGain();
+    g2.gain.setValueAtTime(0.34, t);
+    g2.gain.exponentialRampToValueAtTime(0.0008, t + 0.32);
+    o.connect(g2); g2.connect(master);
+    o.start(t); o.stop(t + 0.34);
+  }
+
+  function heal() {                       // med kit: a soft rising swell
+    if (!ensure()) return;
+    const t = ac.currentTime;
+    [523, 784, 1046].forEach((f, i) => beep(f, t + i * 0.11, 0.42, 0.16, 'sine'));
+  }
+
+  return {
+    ensure, shot, boom, pick, hit, flagHit, emptyClick, reloadMech, levelUp, gameStart,
+    enemyShot, deflect, slice, slash, hurt, heal
+  };
+})();
+
+/* ---------------- camera & projection ---------------- */
+const FOV = (72 * Math.PI) / 180;
+const cam = { x: 0, z: 0, y: 1.68, yaw: 0, pitch: 0, shake: 0 };
+
+// Right-click aim: everything below is blended in by aimBlend(), 0 = hip, 1 = sights.
+const AIM_ZOOM = 0.42;             // how much tighter the field of view gets
+const AIM_TURN = 0.45;             // turning is slower down the sights
+const AIM_SPREAD = 0.42;           // ...and pellets/shot scatter tighten up
+function aimBlend() {
+  return gun.aim;
+}
+
+function focalLength() { return (W * 0.5) / Math.tan(FOV * 0.5) * (1 + AIM_ZOOM * aimBlend()); }
+
+function depthOf(x, z) {
+  return (x - cam.x) * Math.sin(cam.yaw) + (z - cam.z) * Math.cos(cam.yaw);
+}
+
+function project(x, y, z) {
+  const dx = x - cam.x, dz = z - cam.z;
+  const s = Math.sin(cam.yaw), c = Math.cos(cam.yaw);
+  const depth = dx * s + dz * c;
+  if (depth < 0.4) return null;
+  const k = focalLength() / depth;
+  return {
+    x: W * 0.5 + (dx * c - dz * s) * k,
+    y: H * 0.5 - (y - cam.y) * k + focalLength() * Math.tan(cam.pitch),
+    k: k,
+    depth: depth
+  };
+}
+
+function horizonY() { return H * 0.5 + focalLength() * Math.tan(cam.pitch); }
+
+/* ---------------- weapons ----------------
+   Each weapon carries its own stats, its own transform inside the view frame and
+   its own artwork. `ammo` is remembered per weapon, so switching away and back
+   keeps whatever was left in the magazine. Every weapon fires while the trigger
+   is held; `interval` is what makes the AK full-auto and the shotgun slow. */
+const WEAPONS = [
+  {
+    id: 'ak47', name: 'AK-47', key: '1', code: 'Digit1',
+    mag: 30, reload: 1.6, interval: 0.09,
+    pellets: 1, spread: 0,
+    recoil: 0.62, kick: 0.0032, shake: 0.6,
+    flashScale: 1, flashSpikes: 5,
+    anchorX: 0.62, anchorY: 0.93, baseRot: -0.34,
+    sightX: 0.50, sightY: 0.86, sightRot: -0.17,   // right-click: cheek to the stock
+    recoilRise: 0.035, reloadRise: 0.30, reloadTilt: 0.34,
+    muzzle: { x: -219, y: -286 },              // = rotate(-360, -6) by RIFLE_ANGLE
+    draw: drawAK47, sound: 'shot', ammo: 30
+  },
+  {
+    id: 'pistol', name: 'Pistol', key: '2', code: 'Digit2',
+    mag: 12, reload: 1.05, interval: 0.16,
+    pellets: 1, spread: 0,
+    recoil: 0.5, kick: 0.0026, shake: 0.5,
+    flashScale: 0.72, flashSpikes: 5,
+    anchorX: 0.62, anchorY: 0.93, baseRot: -0.34,
+    sightX: 0.50, sightY: 0.83, sightRot: -0.12,
+    recoilRise: 0.035, reloadRise: 0.30, reloadTilt: 0.34,
+    muzzle: { x: -238, y: -233 },
+    draw: drawPistol, sound: 'shot', ammo: 12
+  },
+  {
+    id: 'shotgun', name: 'Shotgun', key: '3', code: 'Digit3',
+    mag: 6, reload: 2.5, interval: 0.72,
+    pellets: 8, spread: 0.032,               // extra pellets scatter over the screen width
+    recoil: 1.5, kick: 0.011, shake: 1.4,
+    flashScale: 1.5, flashSpikes: 7,
+    anchorX: 0.60, anchorY: 0.95, baseRot: -0.30,
+    sightX: 0.50, sightY: 0.88, sightRot: -0.15,
+    recoilRise: 0.05, reloadRise: 0.32, reloadTilt: 0.30,
+    muzzle: { x: -249, y: -314 },
+    draw: drawShotgun, sound: 'boom', ammo: 6
+  },
+  {
+    // No ammo and no range: it cuts enemies down at arm's length and turns their
+    // bullets aside. Right-click raises it into a guard that covers every angle.
+    id: 'katana', name: 'Katana', key: '4', code: 'Digit4',
+    melee: true, mag: 0, reload: 0, interval: 0.52,
+    pellets: 1, spread: 0,
+    reach: 4.6,                                // metres of steel
+    recoil: 0.55, kick: 0.0012, shake: 0.35,
+    flashScale: 0, flashSpikes: 0,
+    anchorX: 0.66, anchorY: 1.00, baseRot: -0.62,
+    sightX: 0.54, sightY: 0.84, sightRot: -0.20,    // guard stance
+    recoilRise: 0.02, reloadRise: 0, reloadTilt: 0,
+    muzzle: { x: -110, y: -240 },
+    draw: drawKatana, sound: 'slash', ammo: 0
+  }
+];
+let gunIndex = 0;
+const currentGun = () => WEAPONS[gunIndex];
+
+/* ---------------- game state ---------------- */
+
+const MAX_HP = 100;
+const MED_KITS = 3;               // carried into every level
+const MED_HEAL = 45;              // hp restored by one kit
+const MED_TIME = 1.1;             // ...spread over this many seconds
+const ENEMY_AIM = 0.72;           // how long an enemy lines you up before firing
+const SLICE_REACH = 3.0;          // the katana sweeps this far around you
+const SLICE_TIME = 0.26;          // ...and the swing stays live this long
+const SLICE_POINTS = 75;          // for cutting a round out of the air
+
+const game = {
+  state: 'menu',                 // menu | playing | paused | levelclear | down
+  level: 1,
+  score: 0,
+  shots: 0,
+  hits: 0,
+  targetsNeeded: 0,
+  flagsNeeded: 0,
+  enemiesNeeded: 0,
+  targetsDone: 0,
+  flagsDone: 0,
+  enemiesDone: 0,
+  kills: 0,
+  deflects: 0,
+  slices: 0,                     // rounds cut out of the air
+  sliceT: 0,                     // seconds the current swing stays live
+  hp: MAX_HP,
+  medKits: MED_KITS,
+  healing: 0,                    // seconds of med kit left to apply
+  healLeft: 0,                   // ...and how much health it still owes you
+  hurtFlash: 0,
+  hurtFrom: 0,                   // screen x of the last hit, for the direction wedge
+  bullets: [],
+  time: 0,
+  levelTime: 0,
+  clearTimer: 0,
+  entities: [],
+  tracers: [],
+  pops: [],
+  sparks: [],
+  scenery: []
+};
+
+const gun = {
+  recoil: 0, flash: 0, reloading: 0, aim: 0,   // aim: 0 hip -> 1 down the sights
+  // the round count always belongs to the weapon in hand, so switching keeps it
+  get ammo() { return WEAPONS[gunIndex].ammo; },
+  set ammo(v) { WEAPONS[gunIndex].ammo = v; }
+};
+const cross = { x: 0, y: 0, hover: false };
+let lastShotAt = -10;
+let triggerHeld = false;          // true while the left mouse button / touch / space is down
+let aiming = false;               // true while the right mouse button is held
+
+function selectWeapon(id) {
+  const idx = typeof id === 'number' ? id : WEAPONS.findIndex(w => w.id === id);
+  if (idx < 0 || idx >= WEAPONS.length || idx === gunIndex) return false;
+  gunIndex = idx;
+  gun.reloading = 0;              // a weapon change cancels a reload in progress
+  gun.recoil = 0;
+  gun.flash = 0;
+  lastShotAt = game.time - 10;    // the new gun is ready to fire straight away
+  Sound.pick();
+  updateHud();
+  return true;
+}
+
+function cycleWeapon(dir) {
+  const n = WEAPONS.length;
+  return selectWeapon((gunIndex + (dir || 1) + n) % n);
+}
+
+/* ---------------- scenery (fixed, yaw independent) ---------------- */
+function buildScenery() {
+  const items = [];
+  for (let i = 0; i < 26; i++) {                    // far hills
+    const a = (i / 26) * TAU + rand(-0.06, 0.06);
+    const d = rand(96, 150);
+    items.push({
+      kind: 'hill', a: a,
+      x: Math.sin(a) * d, z: Math.cos(a) * d,
+      w: rand(34, 70), h: rand(9, 17), d: d,
+      tint: rand(0, 1)
+    });
+  }
+  for (let i = 0; i < 34; i++) {                    // trees / bushes behind the range
+    const a = rand(-Math.PI, Math.PI);
+    const d = rand(62, 100);
+    items.push({
+      kind: 'tree', a: a,
+      x: Math.sin(a) * d, z: Math.cos(a) * d,
+      h: rand(4.5, 9), d: d, seed: rand(0, 10)
+    });
+  }
+  for (let i = 0; i < 9; i++) {                     // clouds
+    const a = (i / 9) * TAU + rand(-0.2, 0.2);
+    const d = 200;
+    items.push({
+      kind: 'cloud', a: a,
+      x: Math.sin(a) * d, z: Math.cos(a) * d,
+      w: rand(26, 46), h: rand(7, 12), d: d
+    });
+  }
+  game.scenery = items;
+}
+buildScenery();
+
+/* ---------------- level construction ---------------- */
+function spawnLevel(n) {
+  const tn = 4 + n;
+  const fn = 2 + Math.ceil(n / 2);
+  const en = 1 + Math.ceil(n / 2);          // armed men on the range, also a quota
+  game.targetsNeeded = tn;
+  game.flagsNeeded = fn;
+  game.enemiesNeeded = en;
+  game.targetsDone = 0;
+  game.flagsDone = 0;
+  game.enemiesDone = 0;
+  game.levelTime = 0;
+
+  const total = tn + 2 + fn + 1 + en;
+  const spread = Math.min(Math.PI * 1.24, Math.PI * 0.52 + n * 0.075);
+  const minR = 13 + n * 0.7;
+  const maxR = Math.min(58, minR + 22 + n * 1.4);
+
+  const angles = [];
+  for (let i = 0; i < total; i++) angles.push(-spread / 2 + (spread * (i + rand(0.2, 0.8))) / total);
+  for (let i = angles.length - 1; i > 0; i--) {
+    const j = randInt(0, i);
+    const t = angles[i]; angles[i] = angles[j]; angles[j] = t;
+  }
+
+  const kinds = [];
+  for (let i = 0; i < tn + 2; i++) kinds.push('target');
+  for (let i = 0; i < fn + 1; i++) kinds.push('flag');
+  for (let i = 0; i < en; i++) kinds.push('enemy');
+  for (let i = kinds.length - 1; i > 0; i--) {
+    const j = randInt(0, i);
+    const t = kinds[i]; kinds[i] = kinds[j]; kinds[j] = t;
+  }
+
+  const ents = [];
+  kinds.forEach((kind, i) => {
+    const a = angles[i];
+    // the shooters stand in front of the gallery, inside pistol range
+    const r = kind === 'enemy' ? rand(Math.max(7, minR - 4), minR + 10) : rand(minR, maxR);
+    const x = Math.sin(a) * r;
+    const z = Math.cos(a) * r;
+    if (kind === 'enemy') {
+      ents.push({
+        type: 'enemy', x: x, z: z, hx: x, hz: z,
+        h: 1.78, r: 0.40,
+        state: 'alive', t: 0, drop: 0, alpha: 1,
+        swayAmp: rand(0.5, 1.5), swaySpeed: rand(0.45, 0.9), wob: rand(0, TAU),
+        cool: rand(1.0, 2.4), aim: 0, flash: 0,
+        jacket: randInt(0, 3)
+      });
+      return;
+    }
+    if (kind === 'target') {
+      const radius = clamp(1.02 - n * 0.05, 0.4, 1.02);
+      const moving = n >= 3 && Math.random() < Math.min(0.6, 0.16 + n * 0.07);
+      ents.push({
+        type: 'target', x: x, z: z, hx: x, hz: z,
+        r: radius, y: rand(1.25, 2.35),
+        state: 'alive', t: 0, drop: 0, alpha: 1,
+        swayAmp: moving ? rand(1.4, 2.8) : 0,
+        swaySpeed: rand(0.7, 1.5),
+        wob: rand(0, TAU)
+      });
+    } else {
+      ents.push({
+        type: 'flag', x: x, z: z, hx: x, hz: z,
+        poleH: rand(3.5, 4.8), w: rand(1.35, 1.95), h: rand(0.85, 1.25),
+        hue: (n * 47 + randInt(0, 30)) % 360,
+        state: 'alive', t: 0, lowered: 0, alpha: 1
+      });
+    }
+  });
+
+  game.entities = ents;
+  game.tracers.length = 0;
+  game.pops.length = 0;
+  game.sparks.length = 0;
+  game.bullets.length = 0;
+  game.sliceT = 0;
+  WEAPONS.forEach(w => { w.ammo = w.mag; });    // every weapon starts a level loaded
+  gun.reloading = 0;
+  cam.yaw = 0;
+  cam.pitch = 0;
+  cross.x = W * 0.5;
+  cross.y = H * 0.42;
+}
+
+/* ---------------- entity simulation ---------------- */
+function updateEntities(dt) {
+  for (let i = game.entities.length - 1; i >= 0; i--) {
+    const e = game.entities[i];
+    if (e.state === 'alive' && e.swayAmp > 0) {      // targets and shooters both walk a line
+      const off = Math.sin(game.time * e.swaySpeed + e.wob) * e.swayAmp;
+      const r = Math.hypot(e.x, e.z) || 1;
+      e.hx = e.x + (e.z / r) * off;
+      e.hz = e.z - (e.x / r) * off;
+    }
+    if (e.state === 'alive' && e.type === 'enemy') {
+      if (e.flash > 0) e.flash = Math.max(0, e.flash - dt * 7);
+      if (e.aim > 0) {                               // lining you up, then the shot
+        e.aim += dt / ENEMY_AIM;
+        if (e.aim >= 1) { e.aim = 0; e.cool = rand(1.5, 3.0); enemyFire(e); }
+      } else {
+        e.cool -= dt;
+        if (e.cool <= 0) e.aim = 0.0001;
+      }
+    }
+    if (e.state === 'dying') {
+      e.t += dt;
+      if (e.type === 'enemy') {
+        const d = Math.min(1, e.t / 1.25);
+        e.drop = easeInQuad(d);
+        e.alpha = d < 0.6 ? 1 : 1 - (d - 0.6) / 0.4;
+        if (d >= 1) game.entities.splice(i, 1);
+      } else if (e.type === 'target') {
+        const d = Math.min(1, e.t / 0.75);
+        e.drop = easeInQuad(d);
+        e.alpha = d < 0.72 ? 1 : 1 - (d - 0.72) / 0.28;
+        if (d >= 1) game.entities.splice(i, 1);
+      } else {
+        const d = Math.min(1, e.t / 1.15);
+        e.lowered = easeInOut(d) * e.poleH;
+        e.alpha = d < 0.7 ? 1 : 1 - (d - 0.7) / 0.3;
+        if (d >= 1) game.entities.splice(i, 1);
+      }
+    }
+  }
+}
+
+function updateEffects(dt) {
+  for (let i = game.tracers.length - 1; i >= 0; i--) {
+    const t = game.tracers[i];
+    t.life -= dt;
+    if (t.life <= 0) game.tracers.splice(i, 1);
+  }
+  for (let i = game.pops.length - 1; i >= 0; i--) {
+    const p = game.pops[i];
+    p.life -= dt;
+    p.y += dt * 1.6;
+    if (p.life <= 0) game.pops.splice(i, 1);
+  }
+  for (let i = game.sparks.length - 1; i >= 0; i--) {
+    const s = game.sparks[i];
+    s.life -= dt;
+    s.x += s.vx * dt;
+    s.y += s.vy * dt;
+    s.vy += 420 * dt;
+    if (s.life <= 0) game.sparks.splice(i, 1);
+  }
+}
+
+/* =========================================================================
+   THE SHOOTERS: their pistols, the rounds they send your way, deflecting
+   them with the katana, and the damage you take.
+   ========================================================================= */
+
+// Where a shooter's pistol sits in the world: chest height, a little in front.
+function enemyMuzzle(e) {
+  const r = Math.hypot(e.hx, e.hz) || 1;
+  return { x: e.hx - (e.hx / r) * 0.36, y: 1.42, z: e.hz - (e.hz / r) * 0.36 };
+}
+
+function enemyFire(e) {
+  if (game.state !== 'playing') return;
+  e.flash = 1;
+  Sound.enemyShot();
+
+  const m = enemyMuzzle(e);
+  const dist = Math.hypot(e.hx - cam.x, e.hz - cam.z);
+  const hitChance = clamp(0.72 - dist * 0.012, 0.18, 0.6);   // far shooters miss more
+  const aimed = Math.random() < hitChance;
+
+  let tx = cam.x, ty = cam.y - 0.34, tz = cam.z;
+  if (aimed) {
+    tx += rand(-0.3, 0.3); ty += rand(-0.22, 0.22); tz += rand(-0.3, 0.3);
+  } else {                                  // a wide round that cracks past your ear
+    const a = rand(0, TAU), off = rand(0.8, 2.1);
+    tx += Math.cos(a) * off; tz += Math.sin(a) * off;
+    ty += rand(-0.5, 0.9);
+  }
+
+  game.bullets.push({
+    x0: m.x, y0: m.y, z0: m.z,
+    x: m.x, y: m.y, z: m.z,
+    tx: tx, ty: ty, tz: tz,
+    dist: Math.hypot(tx - m.x, ty - m.y, tz - m.z),
+    travelled: 0,
+    speed: 95,
+    aimed: aimed,
+    life: 1.6
+  });
+}
+
+// Is this round inside the sweep of a swing? A sphere around the eye: the blade
+// goes round, so it does not matter which way the shot is coming from.
+function inSliceReach(b) {
+  if (game.sliceT <= 0 || !katanaOut()) return false;
+  return Math.hypot(b.x - cam.x, b.y - cam.y, b.z - cam.z) <= SLICE_REACH;
+}
+
+function updateBullets(dt) {
+  for (let i = game.bullets.length - 1; i >= 0; i--) {
+    const b = game.bullets[i];
+    b.travelled += b.speed * dt;
+    b.life -= dt;
+    const u = Math.min(1, b.travelled / b.dist);
+    b.x = lerp(b.x0, b.tx, u);
+    b.y = lerp(b.y0, b.ty, u);
+    b.z = lerp(b.z0, b.tz, u);
+    if (inSliceReach(b)) {                 // a live swing catches it on the way in
+      sliceBullet(b);
+      game.bullets.splice(i, 1);
+      continue;
+    }
+    if (u >= 1 || b.life <= 0) {
+      resolveBullet(b);
+      game.bullets.splice(i, 1);
+    }
+  }
+}
+
+// Cut in two: sparks off the edge and the halves spinning off to either side.
+function sliceBullet(b) {
+  const p = project(b.x, b.y, b.z);
+  const sx = p ? p.x : W * 0.5, sy = p ? p.y : H * 0.5;
+
+  game.slices++;
+  game.score += SLICE_POINTS;
+  Sound.slice();
+  burst(sx, sy, '#ffe9b0', 24, 420);
+  burst(sx, sy, '#eaf3ff', 12, 260);
+  for (let s = -1; s <= 1; s += 2) {
+    addTracer(
+      { x: sx, y: sy },
+      { x: sx + s * rand(80, 170), y: sy + rand(-70, 70) },
+      true
+    );
+  }
+  game.pops.push({
+    x: b.x, y: b.y, z: b.z, text: 'SLICED +' + SLICE_POINTS,
+    life: 0.95, max: 0.95, color: '#eaf3ff'
+  });
+  updateHud();
+}
+
+function katanaOut() { return currentGun().melee === true; }
+function guarding() { return katanaOut() && gun.aim > 0.5; }
+
+// The blade turns a round aside if it is out and the shot comes from the front,
+// or from any angle at all while the guard is raised.
+function deflectsShot(b) {
+  if (!katanaOut()) return false;
+  if (guarding()) return true;
+  const dx = b.x - cam.x, dz = b.z - cam.z;
+  const d = Math.hypot(dx, dz) || 1;
+  return (dx / d) * Math.sin(cam.yaw) + (dz / d) * Math.cos(cam.yaw) > 0.75;
+}
+
+function resolveBullet(b) {
+  const p = project(b.x, b.y, b.z);
+  const sx = p ? p.x : W * 0.5, sy = p ? p.y : H * 0.5;
+
+  if (deflectsShot(b)) {
+    game.deflects++;
+    Sound.deflect();
+    burst(sx, sy, '#ffe9b0', 18, 320);
+    addTracer({ x: sx, y: sy }, { x: sx + rand(-90, 90), y: sy + rand(-90, 90) }, true);
+    game.pops.push({
+      x: b.x, y: b.y, z: b.z, text: 'DEFLECTED',
+      life: 0.9, max: 0.9, color: '#bfe9ff'
+    });
+    return;
+  }
+
+  if (!b.aimed) { burst(sx, sy, '#9fb3c8', 6, 150); return; }
+  hurt(randInt(7, 13), sx);
+}
+
+/* ---------------- health & the med kit ---------------- */
+function hurt(n, screenX) {
+  if (game.state !== 'playing') return;
+  game.hp = Math.max(0, game.hp - n);
+  game.hurtFlash = 1;
+  game.hurtFrom = typeof screenX === 'number' ? screenX : W * 0.5;
+  cam.shake = Math.max(cam.shake, 0.9);
+  Sound.hurt();
+  updateHud();
+  if (game.hp <= 0) playerDown();
+}
+
+function playerDown() {
+  game.state = 'down';
+  aiming = false;
+  triggerHeld = false;
+  gun.aim = 0;
+  Sound.pick();
+  showOverlay('down', {
+    kills: game.kills, deflects: game.deflects, slices: game.slices, acc: accuracy()
+  });
+  updateHud();
+}
+
+function useMedKit() {
+  if (game.state !== 'playing') return false;
+  if (game.medKits <= 0 || game.healing > 0 || game.hp >= MAX_HP) return false;
+  game.medKits--;
+  game.healing = MED_TIME;
+  game.healLeft = Math.min(MED_HEAL, MAX_HP - game.hp);
+  Sound.heal();
+  updateHud();
+  return true;
+}
+
+function tickHeal(dt) {
+  if (game.healing <= 0) return;
+  const rate = MED_HEAL / MED_TIME;
+  const amount = Math.min(game.healLeft, rate * dt);
+  game.hp = Math.min(MAX_HP, game.hp + amount);
+  game.healLeft -= amount;
+  game.healing -= dt;
+  if (game.healing <= 0 || game.healLeft <= 0) { game.healing = 0; game.healLeft = 0; }
+  updateHud();
+}
+
+/* ---------------- hit testing (screen space, nearest wins) ---------------- */
+function targetFace(e) {
+  const cy = e.y - e.drop * e.y;
+  const p = project(e.hx, cy, e.hz);
+  if (!p) return null;
+  return {
+    x: p.x, y: p.y, k: p.k, depth: p.depth,
+    radius: Math.max(e.r * p.k, 9),
+    droop: e.drop
+  };
+}
+
+function flagShape(e) {
+  const hy = e.poleH - e.lowered;
+  const pTop = project(e.x, hy, e.z);
+  const pBot = project(e.x, hy - e.h, e.z);
+  const pBase = project(e.x, 0, e.z);
+  if (!pTop || !pBot || !pBase) return null;
+  return {
+    pTop: pTop, pBot: pBot, pBase: pBase, k: pTop.k,
+    w: e.w * pTop.k,
+    h: Math.abs(pBot.y - pTop.y),
+    depth: pTop.depth
+  };
+}
+
+// Screen-space box for one of the shooters: both the hit test and the art use it.
+function enemyFace(e) {
+  const feet = project(e.hx, 0, e.hz);
+  if (!feet) return null;
+  const k = feet.k;
+  const top = feet.y - e.h * k;
+  return {
+    x: feet.x, k: k, depth: feet.depth,
+    top: top,
+    bot: feet.y,
+    headBot: feet.y - (e.h - 0.26) * k,
+    halfW: Math.max(11, e.r * k)
+  };
+}
+
+function hitTest(e) {
+  if (e.type === 'target') {
+    const f = targetFace(e);
+    if (!f) return null;
+    if (Math.hypot(cross.x - f.x, cross.y - f.y) > f.radius * 1.04) return null;
+    return { x: cross.x, y: cross.y, depth: f.depth };
+  }
+  if (e.type === 'enemy') {
+    const f = enemyFace(e);
+    if (!f) return null;
+    if (cross.x < f.x - f.halfW || cross.x > f.x + f.halfW) return null;
+    if (cross.y < f.top || cross.y > f.bot) return null;
+    // the top quarter-metre of the body is the head, and pays double
+    return { x: cross.x, y: cross.y, depth: f.depth, head: cross.y <= f.headBot };
+  }
+  const s = flagShape(e);
+  if (!s) return null;
+  const top = s.pTop.y;
+  const bot = top + s.h;
+  const inCloth = cross.x >= s.pTop.x - s.k * 0.12 && cross.x <= s.pTop.x + s.w * 1.02 &&
+    cross.y >= top - s.k * 0.08 && cross.y <= bot + s.k * 0.08;
+  const inPole = Math.abs(cross.x - s.pTop.x) <= Math.max(6, s.k * 0.15) &&
+    cross.y >= top - s.k * 0.08 && cross.y <= s.pBase.y;
+  if (!inCloth && !inPole) return null;
+  return { x: cross.x, y: cross.y, depth: s.depth };
+}
+
+function findHit() {
+  let best = null;
+  for (let i = 0; i < game.entities.length; i++) {
+    const e = game.entities[i];
+    if (e.state !== 'alive') continue;
+    const h = hitTest(e);
+    if (h && (!best || h.depth < best.hit.depth)) best = { e: e, hit: h };
+  }
+  return best;
+}
+
+/* ---------------- effects ---------------- */
+function burst(x, y, color, n, spread) {
+  for (let i = 0; i < n; i++) {
+    const a = rand(0, TAU);
+    const sp = rand(60, spread || 340);
+    game.sparks.push({
+      x: x, y: y,
+      vx: Math.cos(a) * sp,
+      vy: Math.sin(a) * sp - 70,
+      life: rand(0.22, 0.6),
+      max: 0.6,
+      color: color,
+      size: rand(1.4, 3.4)
+    });
+  }
+}
+
+function addTracer(from, to, strong) {
+  const life = strong ? 0.08 : 0.06;
+  game.tracers.push({ x1: from.x, y1: from.y, x2: to.x, y2: to.y, life: life, max: life, strong: !!strong });
+}
+
+/* ---------------- shooting ---------------- */
+function applyHit(found) {
+  const e = found.e;
+  e.state = 'dying';
+  e.t = 0;
+
+  if (e.type === 'enemy') {                // a man, not a target: he stays down for good
+    game.enemiesDone++;
+    game.kills++;
+    const head = !!found.hit.head;
+    const pts = head ? 250 : 150;
+    game.score += pts;
+    game.pops.push({
+      x: e.hx, y: 1.15, z: e.hz,
+      text: head ? 'HEADSHOT +' + pts : '+' + pts,
+      life: 1.0, max: 1.0,
+      color: head ? '#ffd166' : '#ffb0a2'
+    });
+    burst(found.hit.x, found.hit.y, '#e0564a', 22);
+    Sound.hit();
+    updateHud();
+    maybeComplete();
+    return;
+  }
+
+  const base = e.type === 'target' ? 100 : 60;
+  const distBonus = Math.round(clamp(36 - found.hit.depth * 0.7, 0, 36));
+  const pts = base + distBonus;
+  game.score += pts;
+
+  if (e.type === 'target') game.targetsDone++; else game.flagsDone++;
+
+  const isTarget = e.type === 'target';
+  game.pops.push({
+    x: isTarget ? e.hx : e.x,
+    y: isTarget ? (e.y - e.drop * e.y) + e.r + 0.55 : (e.poleH - e.lowered) + 0.55,
+    z: isTarget ? e.hz : e.z,
+    text: '+' + pts,
+    life: 1.0,
+    max: 1.0,
+    color: isTarget ? '#ffb0a2' : '#a5dcff'
+  });
+  burst(found.hit.x, found.hit.y, isTarget ? '#ffd9a0' : '#ffe08a', isTarget ? 20 : 14);
+
+  if (isTarget) Sound.hit(); else Sound.flagHit();
+  updateHud();
+
+  maybeComplete();
+}
+
+// Every quota has to be filled before the range lets you move on.
+function maybeComplete() {
+  if (game.targetsDone >= game.targetsNeeded &&
+      game.flagsDone >= game.flagsNeeded &&
+      game.enemiesDone >= game.enemiesNeeded) completeLevel();
+}
+
+/* ---------------- the katana ---------------- */
+// A swing: no ammo, no tracer. Anything drawing a bead on you inside the arc
+// and within reach goes down.
+function slash() {
+  const w = currentGun();
+  if (game.state !== 'playing') return;
+  if (game.time - lastShotAt < w.interval) return;
+
+  lastShotAt = game.time;
+  gun.recoil = w.recoil;
+  cam.shake = w.shake;
+  game.shots++;
+  game.sliceT = SLICE_TIME;        // the blade stays live for a moment after the swing
+
+  let best = null, bestDepth = Infinity;
+  for (let i = 0; i < game.entities.length; i++) {
+    const e = game.entities[i];
+    if (e.state !== 'alive' || e.type !== 'enemy') continue;
+    const d = depthOf(e.hx, e.hz);
+    if (d <= 0.4 || d > w.reach) continue;
+    const p = project(e.hx, 1.0, e.hz);
+    if (!p) continue;
+    const halfW = Math.max(34, e.r * p.k * 1.6);
+    if (Math.abs(cross.x - p.x) > halfW) continue;
+    if (Math.abs(cross.y - p.y) > Math.max(70, p.k * 1.15)) continue;   // chest height, roughly
+    if (d < bestDepth) { bestDepth = d; best = e; }
+  }
+
+  Sound.slash();
+
+  // a round already hanging inside the sweep goes down where it flies
+  let credited = false;
+  for (let i = game.bullets.length - 1; i >= 0; i--) {
+    const b = game.bullets[i];
+    if (!inSliceReach(b)) continue;
+    sliceBullet(b);
+    game.bullets.splice(i, 1);
+    credited = true;
+  }
+
+  if (best) {
+    credited = true;
+    applyHit({ e: best, hit: { x: cross.x, y: cross.y, depth: bestDepth, head: false } });
+  } else if (!credited) {
+    burst(cross.x, cross.y, '#dfe6ef', 8, 220);   // a swing at empty air
+  }
+  if (credited) game.hits++;      // a cut man or a cut round: the swing did its job
+  updateHud();
+}
+
+function fire() {
+  const w = currentGun();
+  if (game.state !== 'playing') return;
+  if (w.melee) { slash(); return; }              // the katana swings instead of firing
+  if (gun.reloading > 0) return;
+  if (game.time - lastShotAt < w.interval) return;
+  if (gun.ammo <= 0) { Sound.emptyClick(); startReload(); return; }
+
+  lastShotAt = game.time;
+  gun.ammo--;
+  gun.recoil = w.recoil;
+  gun.flash = 1;
+  cam.pitch += w.kick * (1 - aimBlend() * 0.35);   // braced against the shoulder: less climb
+  cam.shake = w.shake;
+  game.shots++;
+
+  const muzzle = gunMuzzle();
+  const aimX = cross.x, aimY = cross.y;    // hitTest() reads the global crosshair
+  const struck = [];
+  let anyHit = false;
+
+  // down the sights the pattern closes up: aimBlend() 0 -> full spread, 1 -> AIM_SPREAD
+  const spread = w.spread * (1 - aimBlend() * (1 - AIM_SPREAD));
+
+  for (let i = 0; i < w.pellets; i++) {
+    if (i > 0) {                           // the first pellet flies true, the rest scatter
+      cross.x = aimX + rand(-1, 1) * spread * W;
+      cross.y = aimY + rand(-1, 1) * spread * W;
+    }
+    const found = findHit();
+    const dx = cross.x - muzzle.x, dy = cross.y - muzzle.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const impact = found ? found.hit : { x: cross.x + (dx / len) * 170, y: cross.y + (dy / len) * 170, depth: 999 };
+    addTracer(muzzle, impact, !!found);
+
+    if (!found) { burst(cross.x, cross.y, '#cfd6e0', w.pellets > 1 ? 2 : 6, 180); continue; }
+    if (struck.indexOf(found.e) !== -1) continue;   // a target only counts once per shot
+    struck.push(found.e);
+    applyHit(found);
+    anyHit = true;
+  }
+
+  cross.x = aimX; cross.y = aimY;
+  if (anyHit) game.hits++;                 // accuracy counts shots that connected
+
+  if (w.sound === 'boom') Sound.boom(); else Sound.shot();
+  updateHud();
+}
+
+/* ---------------- reloading ---------------- */
+function startReload() {
+  const w = currentGun();
+  if (game.state !== 'playing') return false;
+  if (gun.reloading > 0 || gun.ammo >= w.mag) return false;
+  gun.reloading = w.reload;
+  Sound.reloadMech();
+  updateHud();
+  return true;
+}
+
+function tickReload(dt) {
+  if (gun.reloading <= 0) return;
+  gun.reloading -= dt;
+  if (gun.reloading <= 0) {
+    const w = currentGun();
+    gun.reloading = 0;
+    w.ammo = w.mag;
+    Sound.reloadMech();
+    updateHud();
+  }
+}
+
+/* ---------------- flow control ---------------- */
+function accuracy() {
+  return game.shots ? game.hits / game.shots : 0;
+}
+
+function completeLevel() {
+  if (game.state !== 'playing') return;
+  game.state = 'levelclear';
+  game.clearTimer = 3.0;
+
+  const acc = accuracy();
+  const clearBonus = 220 + game.level * 60;
+  const accBonus = Math.round(acc * 300);
+  const timeBonus = Math.max(0, Math.round(360 - game.levelTime * 10));
+  game.score += clearBonus + accBonus + timeBonus;
+  game.bestLevel = Math.max(game.bestLevel || 1, game.level + 1);
+
+  Sound.levelUp();
+  showOverlay('levelclear', { clearBonus: clearBonus, accBonus: accBonus, timeBonus: timeBonus, acc: acc });
+  updateHud();
+}
+
+function nextLevel() {
+  game.level++;
+  spawnLevel(game.level);
+  game.state = 'playing';
+  hideOverlay();
+  updateHud();
+}
+
+function startGame() {
+  Sound.ensure();
+  Sound.gameStart();
+  game.level = 1;
+  game.score = 0;
+  game.shots = 0;
+  game.hits = 0;
+  game.kills = 0;
+  game.deflects = 0;
+  game.slices = 0;
+  game.sliceT = 0;
+  game.time = 0;
+  game.bestLevel = 1;
+  game.hp = MAX_HP;
+  game.medKits = MED_KITS;
+  game.healing = 0;
+  game.healLeft = 0;
+  game.hurtFlash = 0;
+  spawnLevel(1);
+  game.state = 'playing';
+  lastShotAt = game.time;
+  hideOverlay();
+  updateHud();
+}
+
+function togglePause() {
+  if (game.state === 'playing') {
+    game.state = 'paused';
+    showOverlay('paused');
+  } else if (game.state === 'paused') {
+    game.state = 'playing';
+    hideOverlay();
+  }
+}
+
+
+/* =========================================================================
+   WORLD RENDERING
+   ========================================================================= */
+function drawWorldSeg(x1, z1, x2, z2, y, color, alpha, width) {
+  const a = depthOf(x1, z1), b = depthOf(x2, z2);
+  if (a < 0.4 && b < 0.4) return;
+  let ax = x1, az = z1, bx = x2, bz = z2;
+  if (a < 0.4) {
+    const t = (0.4 - a) / (b - a);
+    ax = x1 + (x2 - x1) * t; az = z1 + (z2 - z1) * t;
+  } else if (b < 0.4) {
+    const t = (0.4 - b) / (a - b);
+    bx = x2 + (x1 - x2) * t; bz = z2 + (z1 - z2) * t;
+  }
+  const p1 = project(ax, y, az), p2 = project(bx, y, bz);
+  if (!p1 || !p2) return;
+  ctx.globalAlpha = alpha;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.beginPath();
+  ctx.moveTo(p1.x, p1.y);
+  ctx.lineTo(p2.x, p2.y);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+}
+
+function drawSky() {
+  const hy = horizonY();
+  const top = Math.min(0, hy - H * 1.2);
+  const g = ctx.createLinearGradient(0, top, 0, hy);
+  g.addColorStop(0, '#0a1626');
+  g.addColorStop(0.45, '#274f7c');
+  g.addColorStop(0.78, '#7d7fa0');
+  g.addColorStop(1, '#e0a473');
+  ctx.fillStyle = g;
+  ctx.fillRect(-40, top, W + 80, hy - top + 1);
+}
+
+function drawSun() {
+  const p = project(Math.sin(0.42) * 420, 34, Math.cos(0.42) * 420);
+  if (!p) return;
+  const r = Math.max(60, H * 0.22);
+  const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
+  g.addColorStop(0, 'rgba(255, 226, 170, 0.95)');
+  g.addColorStop(0.16, 'rgba(255, 196, 120, 0.55)');
+  g.addColorStop(0.5, 'rgba(255, 150, 90, 0.18)');
+  g.addColorStop(1, 'rgba(255, 140, 80, 0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, r, 0, TAU);
+  ctx.fill();
+}
+
+function drawGround() {
+  const hy = horizonY();
+  const g = ctx.createLinearGradient(0, hy, 0, H);
+  g.addColorStop(0, '#6f7a4d');
+  g.addColorStop(0.35, '#4c5a35');
+  g.addColorStop(1, '#26311d');
+  ctx.fillStyle = g;
+  ctx.fillRect(-40, hy, W + 80, H - hy + 60);
+}
+
+function drawGrid() {
+  const near = 3, far = 84, half = 42;
+  for (let z = near; z <= far; z += 5) {
+    for (let x = -half; x < half; x += 8) {
+      const d = Math.hypot(x + 4, z);
+      const alpha = 0.3 * (1 - d / 95);
+      if (alpha > 0.012) drawWorldSeg(x, z, x + 8, z, 0.01, '#a8d78d', alpha, 1);
+    }
+  }
+  for (let x = -half; x <= half; x += 8) {
+    for (let z = near; z < far; z += 9) {
+      const d = Math.hypot(x, z + 4.5);
+      const alpha = 0.26 * (1 - d / 95);
+      if (alpha > 0.012) drawWorldSeg(x, z, x, z + 9, 0.01, '#93c880', alpha, 1);
+    }
+  }
+}
+
+function drawClouds() {
+  for (let i = 0; i < game.scenery.length; i++) {
+    const it = game.scenery[i];
+    if (it.kind !== 'cloud') continue;
+    const p = project(it.x, it.d, it.z);
+    if (!p) continue;
+    const w = it.w * p.k, h = it.h * p.k;
+    if (w < 3) continue;
+    ctx.globalAlpha = 0.28;
+    ctx.fillStyle = '#ffdcbb';
+    ctx.beginPath();
+    ctx.ellipse(p.x, p.y, w * 0.5, h * 0.5, 0, 0, TAU);
+    ctx.ellipse(p.x + w * 0.3, p.y + h * 0.12, w * 0.34, h * 0.4, 0, 0, TAU);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawScenery() {
+  const items = [];
+  for (let i = 0; i < game.scenery.length; i++) {
+    const it = game.scenery[i];
+    if (it.kind === 'cloud') continue;
+    it.__depth = depthOf(it.x, it.z);
+    if (it.__depth > 1) items.push(it);
+  }
+  items.sort((a, b) => b.__depth - a.__depth);
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (it.kind === 'hill') drawHill(it);
+    else drawTree(it);
+  }
+}
+
+function drawHill(it) {
+  const left = { x: it.x - Math.cos(it.a) * it.w * 0.5, z: it.z + Math.sin(it.a) * it.w * 0.5 };
+  const right = { x: it.x + Math.cos(it.a) * it.w * 0.5, z: it.z - Math.sin(it.a) * it.w * 0.5 };
+  const pl = project(left.x, 0, left.z);
+  const pr = project(right.x, 0, right.z);
+  const pa = project(it.x, it.h, it.z);
+  if (!pl || !pr || !pa) return;
+  const g = ctx.createLinearGradient(0, pa.y, 0, (pl.y + pr.y) * 0.5);
+  const mix = it.tint;
+  g.addColorStop(0, 'rgba(88, 106, 116, 0.95)');
+  g.addColorStop(1, mix > 0.5 ? 'rgba(60, 74, 66, 0.98)' : 'rgba(48, 62, 58, 0.98)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.moveTo(pl.x, pl.y);
+  ctx.quadraticCurveTo(pl.x + (pa.x - pl.x) * 0.4, pa.y + (pl.y - pa.y) * 0.12, pa.x, pa.y);
+  ctx.quadraticCurveTo(pr.x + (pa.x - pr.x) * 0.4, pa.y + (pr.y - pa.y) * 0.12, pr.x, pr.y);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawTree(it) {
+  const base = project(it.x, 0, it.z);
+  const top = project(it.x, it.h, it.z);
+  if (!base || !top) return;
+  const k = base.k;
+  ctx.strokeStyle = 'rgba(46, 34, 24, 0.9)';
+  ctx.lineWidth = Math.max(1, k * 0.14);
+  ctx.beginPath();
+  ctx.moveTo(base.x, base.y);
+  ctx.lineTo(top.x, top.y);
+  ctx.stroke();
+
+  const r = Math.max(2, it.h * k * 0.34);
+  ctx.fillStyle = 'rgba(34, 66, 40, 0.94)';
+  ctx.beginPath();
+  ctx.ellipse(top.x, top.y, r, r * 0.9, 0, 0, TAU);
+  ctx.ellipse(top.x - r * 0.7, top.y + r * 0.35, r * 0.75, r * 0.65, 0, 0, TAU);
+  ctx.ellipse(top.x + r * 0.7, top.y + r * 0.3, r * 0.72, r * 0.62, 0, 0, TAU);
+  ctx.fill();
+}
+
+/* ---------------- targets & flags ---------------- */
+function drawTarget(e) {
+  const f = targetFace(e);
+  if (!f) return;
+  const R = e.r * f.k;
+  const baseL = project(e.hx - 0.5, 0, e.hz);
+  const baseR = project(e.hx + 0.5, 0, e.hz);
+  ctx.save();
+  ctx.globalAlpha = e.alpha;
+
+  if (baseL && baseR) {
+    ctx.strokeStyle = '#6d5b45';
+    ctx.lineWidth = Math.max(1.1, f.k * 0.075);
+    ctx.beginPath();
+    ctx.moveTo(f.x - R * 0.8, f.y + R * 0.5);
+    ctx.lineTo(baseL.x, baseL.y);
+    ctx.moveTo(f.x + R * 0.8, f.y + R * 0.5);
+    ctx.lineTo(baseR.x, baseR.y);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(58, 47, 34, 0.5)';
+    ctx.beginPath();
+    ctx.ellipse((baseL.x + baseR.x) * 0.5, (baseL.y + baseR.y) * 0.5,
+      Math.max(1.5, f.k * 0.62), Math.max(0.8, f.k * 0.15), 0, 0, TAU);
+    ctx.fill();
+  }
+
+  ctx.translate(f.x, f.y);
+  ctx.rotate(f.droop * 1.15);
+  ctx.scale(1, Math.max(0.08, 1 - 0.62 * f.droop));
+
+  const rings = [[1, '#f5f7fa'], [0.72, '#e8422f'], [0.46, '#f5f7fa'], [0.22, '#e8422f']];
+  for (let i = 0; i < rings.length; i++) {
+    ctx.beginPath();
+    ctx.arc(0, 0, Math.max(0.4, R * rings[i][0]), 0, TAU);
+    ctx.fillStyle = rings[i][1];
+    ctx.fill();
+  }
+  ctx.lineWidth = Math.max(0.8, R * 0.06);
+  ctx.strokeStyle = 'rgba(24, 20, 16, 0.6)';
+  ctx.beginPath();
+  ctx.arc(0, 0, R, 0, TAU);
+  ctx.stroke();
+
+  const sheen = ctx.createLinearGradient(-R, -R, R, R);
+  sheen.addColorStop(0, 'rgba(255,255,255,0.32)');
+  sheen.addColorStop(0.42, 'rgba(255,255,255,0)');
+  sheen.addColorStop(1, 'rgba(0,0,0,0.2)');
+  ctx.beginPath();
+  ctx.arc(0, 0, R, 0, TAU);
+  ctx.fillStyle = sheen;
+  ctx.fill();
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
+function drawFlag(e) {
+  const s = flagShape(e);
+  if (!s) return;
+  const pTop = s.pTop, pBase = s.pBase, k = s.k;
+
+  ctx.save();
+  ctx.globalAlpha = e.alpha;
+
+  ctx.strokeStyle = '#cbd4de';
+  ctx.lineCap = 'round';
+  ctx.lineWidth = Math.max(1.2, k * 0.045);
+  ctx.beginPath();
+  ctx.moveTo(pBase.x, pBase.y);
+  ctx.lineTo(pTop.x, pTop.y);
+  ctx.stroke();
+
+  const w = s.w, h = s.h;
+  const wave = Math.sin(game.time * 3.1 + e.x * 0.6) * k * 0.12;
+  const wave2 = Math.sin(game.time * 3.1 + e.x * 0.6 + 1.3) * k * 0.2;
+
+  ctx.beginPath();
+  ctx.moveTo(pTop.x, pTop.y);
+  ctx.quadraticCurveTo(pTop.x + w * 0.55, pTop.y + h * 0.12 + wave, pTop.x + w, pTop.y + h * 0.34 + wave2);
+  ctx.lineTo(pTop.x + w * 0.9, pTop.y + h * 0.86 + wave2 * 0.6);
+  ctx.quadraticCurveTo(pTop.x + w * 0.5, pTop.y + h * 0.96 + wave, pTop.x, pTop.y + h);
+  ctx.closePath();
+  const g = ctx.createLinearGradient(pTop.x, pTop.y, pTop.x + w, pTop.y + h);
+  g.addColorStop(0, 'hsl(' + e.hue + ' 88% 64%)');
+  g.addColorStop(1, 'hsl(' + ((e.hue + 30) % 360) + ' 82% 44%)');
+  ctx.fillStyle = g;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.28)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.arc(pTop.x, pTop.y - Math.max(1.2, k * 0.07), Math.max(1.4, k * 0.075), 0, TAU);
+  ctx.fillStyle = '#ffcb47';
+  ctx.fill();
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
+/* ---- the armed men ---- */
+const JACKETS = [
+  { coat: '#3c4a5e', trim: '#2b3546', hat: '#22303f' },
+  { coat: '#5a4436', trim: '#3d2f26', hat: '#2f2318' },
+  { coat: '#4a5450', trim: '#333b38', hat: '#26302c' },
+  { coat: '#5b3a44', trim: '#3f2830', hat: '#33202a' }
+];
+
+// Drawn with the feet as the origin, +y down, so the body grows upwards.
+function drawEnemy(e) {
+  const f = enemyFace(e);
+  if (!f) return;
+  const k = f.k;
+  const c = JACKETS[e.jacket % JACKETS.length];
+  const aim = clamp(e.aim, 0, 1);
+
+  ctx.save();
+  ctx.globalAlpha = e.alpha;
+  ctx.translate(f.x, f.bot);
+  if (e.drop > 0) ctx.rotate(e.drop * 1.15);        // topples sideways about the boots
+
+  // shadow
+  ctx.fillStyle = 'rgba(40, 34, 26, 0.42)';
+  ctx.beginPath();
+  ctx.ellipse(0, 0, k * 0.42, k * 0.11, 0, 0, TAU);
+  ctx.fill();
+
+  // legs and boots
+  ctx.fillStyle = '#2c333d';
+  rrect(-0.24 * k, -0.92 * k, 0.2 * k, 0.9 * k, 0.06 * k); ctx.fill();
+  rrect(0.04 * k, -0.92 * k, 0.2 * k, 0.9 * k, 0.06 * k); ctx.fill();
+  ctx.fillStyle = '#1d2229';
+  rrect(-0.27 * k, -0.07 * k, 0.26 * k, 0.07 * k, 0.03 * k); ctx.fill();
+  rrect(0.01 * k, -0.07 * k, 0.26 * k, 0.07 * k, 0.03 * k); ctx.fill();
+
+  // torso
+  ctx.fillStyle = c.coat;
+  rrect(-0.28 * k, -1.62 * k, 0.56 * k, 0.74 * k, 0.11 * k); ctx.fill();
+  ctx.fillStyle = c.trim;
+  rrect(-0.28 * k, -1.05 * k, 0.56 * k, 0.1 * k, 0.04 * k); ctx.fill();
+
+  // head and cap
+  ctx.fillStyle = SKIN_A;
+  ctx.beginPath();
+  ctx.arc(0, -1.73 * k, 0.135 * k, 0, TAU);
+  ctx.fill();
+  ctx.fillStyle = c.hat;
+  ctx.beginPath();
+  ctx.arc(0, -1.77 * k, 0.145 * k, Math.PI * 1.02, Math.PI * 2.02);
+  ctx.fill();
+  rrect(-0.2 * k, -1.82 * k, 0.4 * k, 0.05 * k, 0.02 * k);
+  ctx.fill();
+
+  // the extended arm, the pistol, and how far up it has come: a raised arm is
+  // the tell that this one is about to shoot you
+  const hy = -k * lerp(1.14, 1.5, aim);
+  const hx = k * 0.26;
+  ctx.strokeStyle = c.coat;
+  ctx.lineWidth = Math.max(1.5, k * 0.1);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(0.2 * k, -1.5 * k);
+  ctx.lineTo(hx, hy);
+  ctx.stroke();
+
+  const cx = (W * 0.5 - (f.x + hx)) / Math.max(1, k), cy = (H * 0.5 - (f.bot + hy)) / Math.max(1, k);
+  const cd = Math.hypot(cx, cy) || 1;
+  const ux = cx / cd, uy = cy / cd;                 // the barrel leans toward the viewer
+  const mx = hx + ux * 0.42 * k, my = hy + uy * 0.42 * k;
+  ctx.strokeStyle = '#16191d';
+  ctx.lineWidth = Math.max(2, k * 0.09);
+  ctx.beginPath();
+  ctx.moveTo(hx, hy);
+  ctx.lineTo(mx, my);
+  ctx.stroke();
+
+  if (e.flash > 0) {                                // his muzzle flash
+    ctx.save();
+    ctx.globalAlpha = e.alpha * e.flash;
+    ctx.fillStyle = 'rgba(255, 214, 120, 0.95)';
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * TAU + game.time * 4;
+      const rr = i % 2 === 0 ? 0.17 * k : 0.07 * k;
+      const px2 = mx + Math.cos(a) * rr, py2 = my + Math.sin(a) * rr;
+      if (i === 0) ctx.moveTo(px2, py2); else ctx.lineTo(px2, py2);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  if (e.state === 'alive' && aim > 0) {              // the aiming tell over his head
+    const pulse = 0.55 + 0.45 * Math.sin(game.time * 13);
+    ctx.globalAlpha = e.alpha * aim * pulse;
+    ctx.strokeStyle = '#ff5a4d';
+    ctx.lineWidth = Math.max(1.4, k * 0.035);
+    ctx.beginPath();
+    ctx.arc(0, -2.02 * k, 0.1 * k, 0, TAU);
+    ctx.stroke();
+    ctx.fillStyle = '#ff5a4d';
+    ctx.beginPath();
+    ctx.arc(0, -2.02 * k, 0.055 * k, 0, TAU);
+    ctx.fill();
+  }
+
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
+function drawEntities() {
+  const list = [];
+  for (let i = 0; i < game.entities.length; i++) {
+    const e = game.entities[i];
+    const x = e.type === 'flag' ? e.x : e.hx;
+    const z = e.type === 'flag' ? e.z : e.hz;
+    const d = depthOf(x, z);
+    if (d > 0.5) list.push({ e: e, d: d });
+  }
+  list.sort((a, b) => b.d - a.d);
+  for (let i = 0; i < list.length; i++) {
+    const e = list[i].e;
+    if (e.type === 'target') drawTarget(e);
+    else if (e.type === 'enemy') drawEnemy(e);
+    else drawFlag(e);
+  }
+}
+
+/* ---------------- effects & overlays ---------------- */
+function drawEffects() {
+  for (let i = 0; i < game.tracers.length; i++) {
+    const t = game.tracers[i];
+    const a = clamp(t.life / t.max, 0, 1) * (t.strong ? 0.9 : 0.5);
+    const g = ctx.createLinearGradient(t.x1, t.y1, t.x2, t.y2);
+    g.addColorStop(0, 'rgba(255, 236, 170, 0)');
+    g.addColorStop(0.25, 'rgba(255, 232, 160, ' + a + ')');
+    g.addColorStop(1, 'rgba(255, 250, 220, 0)');
+    ctx.strokeStyle = g;
+    ctx.lineWidth = t.strong ? 2.6 : 1.8;
+    ctx.beginPath();
+    ctx.moveTo(t.x1, t.y1);
+    ctx.lineTo(t.x2, t.y2);
+    ctx.stroke();
+  }
+
+  for (let i = 0; i < game.sparks.length; i++) {
+    const s = game.sparks[i];
+    ctx.globalAlpha = clamp(s.life / s.max, 0, 1);
+    ctx.fillStyle = s.color;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, s.size, 0, TAU);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // rounds coming the other way: a hot streak that grows as it reaches you
+  for (let i = 0; i < game.bullets.length; i++) {
+    const b = game.bullets[i];
+    const head = project(b.x, b.y, b.z);
+    if (!head) continue;
+    const u = Math.max(0, (b.travelled - 1.8) / b.dist);
+    const tail = project(lerp(b.x0, b.tx, u), lerp(b.y0, b.ty, u), lerp(b.z0, b.tz, u));
+    if (tail) {
+      const g = ctx.createLinearGradient(tail.x, tail.y, head.x, head.y);
+      g.addColorStop(0, 'rgba(255, 170, 90, 0)');
+      g.addColorStop(1, 'rgba(255, 226, 160, 0.9)');
+      ctx.strokeStyle = g;
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      ctx.moveTo(tail.x, tail.y);
+      ctx.lineTo(head.x, head.y);
+      ctx.stroke();
+    }
+    ctx.fillStyle = 'rgba(255, 240, 200, 0.95)';
+    ctx.beginPath();
+    ctx.arc(head.x, head.y, 2.4, 0, TAU);
+    ctx.fill();
+  }
+
+  ctx.textAlign = 'center';
+  ctx.font = '700 19px ui-sans-serif, system-ui, sans-serif';
+  for (let i = 0; i < game.pops.length; i++) {
+    const p = game.pops[i];
+    const pr = project(p.x, p.y, p.z);
+    if (!pr) continue;
+    ctx.globalAlpha = clamp(p.life / p.max, 0, 1);
+    ctx.lineWidth = 3.5;
+    ctx.strokeStyle = 'rgba(8, 12, 18, 0.75)';
+    ctx.strokeText(p.text, pr.x, pr.y);
+    ctx.fillStyle = p.color;
+    ctx.fillText(p.text, pr.x, pr.y);
+  }
+  ctx.globalAlpha = 1;
+  ctx.textAlign = 'left';
+}
+
+function drawCrosshair() {
+  const x = cross.x, y = cross.y;
+  const aim = aimBlend();
+  const col = cross.hover ? '#ff6a5a' : 'rgba(255,255,255,0.92)';
+  ctx.save();
+  ctx.strokeStyle = col;
+  ctx.lineWidth = 2;
+  ctx.lineCap = 'round';
+  // down the sights the crosshair pulls in tight
+  const gap = (cross.hover ? 5 : 7) * (1 - aim * 0.75) + aim * 0.6;
+  const len = (cross.hover ? 9 : 11) * (1 - aim * 0.5);
+  ctx.beginPath();
+  ctx.moveTo(x - gap - len, y); ctx.lineTo(x - gap, y);
+  ctx.moveTo(x + gap, y); ctx.lineTo(x + gap + len, y);
+  ctx.moveTo(x, y - gap - len); ctx.lineTo(x, y - gap);
+  ctx.moveTo(x, y + gap); ctx.lineTo(x, y + gap + len);
+  ctx.stroke();
+  ctx.fillStyle = col;
+  ctx.beginPath();
+  ctx.arc(x, y, cross.hover ? 2.6 : 2, 0, TAU);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawVignette() {
+  const g = ctx.createRadialGradient(W * 0.5, H * 0.5, Math.min(W, H) * 0.35, W * 0.5, H * 0.5, Math.max(W, H) * 0.75);
+  g.addColorStop(0, 'rgba(0,0,0,0)');
+  g.addColorStop(1, 'rgba(0,0,0,0.45)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+
+  if (gun.flash > 0) {
+    ctx.globalAlpha = clamp(gun.flash, 0, 1) * 0.12;
+    ctx.fillStyle = '#ffd9a0';
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalAlpha = 1;
+  }
+
+  // blood in the corners: a red bloom where the round landed, and a permanent
+  // pressure when you are running low
+  const lowHp = game.hp > 0 && game.hp < MAX_HP * 0.34 ? (1 - game.hp / (MAX_HP * 0.34)) : 0;
+  const hurt = clamp(game.hurtFlash, 0, 1);
+  if (hurt > 0.01 || lowHp > 0.01 || game.healing > 0) {
+    const fx = clamp(game.hurtFrom / W, 0, 1);
+    const cxp = W * (fx * 0.7 + 0.15);
+    const rg = ctx.createRadialGradient(cxp, H * 0.55, Math.min(W, H) * 0.06, cxp, H * 0.55, Math.max(W, H) * 0.62);
+    const strength = Math.max(hurt * (0.55 + 0.2 * Math.sin(game.time * 22)), lowHp * (0.3 + 0.12 * Math.sin(game.time * 4)));
+    rg.addColorStop(0, 'rgba(150, 12, 6, ' + (strength * 0.75).toFixed(3) + ')');
+    rg.addColorStop(1, 'rgba(150, 12, 6, 0)');
+    ctx.fillStyle = rg;
+    ctx.fillRect(0, 0, W, H);
+  }
+  if (game.healing > 0) {                       // a green wash while a kit works
+    ctx.globalAlpha = 0.1 * (0.6 + 0.4 * Math.sin(game.time * 9));
+    ctx.fillStyle = '#7dffa8';
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalAlpha = 1;
+  }
+}
+
+function render() {
+  ctx.clearRect(0, 0, W, H);
+  const amp = cam.shake * 9;
+  ctx.save();
+  if (amp > 0.2) {
+    ctx.translate(Math.sin(game.time * 61) * amp, Math.cos(game.time * 47) * amp * 0.7);
+    ctx.rotate(cam.shake * 0.0035);
+  }
+  drawSky();
+  drawSun();
+  drawClouds();
+  drawGround();
+  drawGrid();
+  drawScenery();
+  drawEntities();
+  drawEffects();
+  ctx.restore();
+
+  drawGun();
+  drawCrosshair();
+  drawVignette();
+}
+
+
+/* =========================================================================
+   FIRST PERSON: the shooter's arms, hands and weapon
+   Local space: +y is down, origin near the wrists at the lower right.
+   Every gun is built horizontally in its own sub-frame that is tilted up-left
+   by RIFLE_ANGLE / SHOTGUN_ANGLE, i.e. the barrel leaves the frame towards the
+   crosshair. How the gun sits in the view comes from the weapon's own fields.
+   ========================================================================= */
+const RIFLE_ANGLE = 0.9;                       // barrel pitch inside the rifle sub-frame
+const SHOTGUN_ANGLE = 0.86;
+
+function gunScale() {
+  return clamp(Math.min(W / 1280, H / 880), 0.55, 1.3);
+}
+
+function gunTransform() {
+  const w = currentGun();
+  const aim = aimBlend();
+  const swingX = (cross.x - W * 0.5) / W;
+  const swingY = (cross.y - H * 0.5) / H;
+  const progress = gun.reloading > 0 ? 1 - gun.reloading / w.reload : 0;
+  const reloadDrop = gun.reloading > 0 ? Math.sin(progress * Math.PI) : 0;
+  // hip position, then the sighted-in position the right mouse button blends to
+  const ax = lerp(w.anchorX, w.sightX, aim);
+  const ay = lerp(w.anchorY, w.sightY, aim);
+  const arot = lerp(w.baseRot, w.sightRot, aim);
+  return {
+    x: W * ax + swingX * W * 0.045 * (1 - aim * 0.6) + Math.sin(game.time * 1.7) * 3.2 * (1 - aim * 0.8),
+    y: H * ay + swingY * H * 0.05 * (1 - aim * 0.6) + gun.recoil * H * w.recoilRise +
+       reloadDrop * H * w.reloadRise + Math.cos(game.time * 2.2) * 2.4 * (1 - aim * 0.8),
+    rot: arot + swingX * 0.2 * (1 - aim * 0.5) + gun.recoil * 0.05 -
+         reloadDrop * w.reloadTilt + Math.sin(game.time * 0.85) * 0.007 * (1 - aim * 0.7),
+    reloadDrop: reloadDrop,
+    aim: aim
+  };
+}
+
+function gunMuzzle() {
+  const w = currentGun();
+  const t = gunTransform();
+  const s = gunScale();
+  const lx = w.muzzle.x * s, ly = w.muzzle.y * s;
+  const cos = Math.cos(t.rot), sin = Math.sin(t.rot);
+  return { x: t.x + lx * cos - ly * sin, y: t.y + lx * sin + ly * cos };
+}
+
+function rrect(x, y, w, h, r) {
+  const rr = Math.min(r, Math.abs(w) / 2, Math.abs(h) / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+}
+
+const SKIN_A = '#d9a97c', SKIN_B = '#c48d61', SKIN_C = '#eabf93';
+
+function drawArms() {
+  ctx.lineCap = 'round';
+  // trigger arm: from the bottom-right corner up to the pistol grip
+  ctx.strokeStyle = '#5b6244';
+  ctx.lineWidth = 96;
+  ctx.beginPath();
+  ctx.moveTo(340, 470);
+  ctx.lineTo(-16, 60);
+  ctx.stroke();
+
+  // support arm: crosses under the rifle to the handguard
+  ctx.strokeStyle = '#4e5540';
+  ctx.lineWidth = 88;
+  ctx.beginPath();
+  ctx.moveTo(250, 545);
+  ctx.lineTo(-124, -112);
+  ctx.stroke();
+
+  // crease highlight along the trigger arm
+  ctx.strokeStyle = 'rgba(0,0,0,0.18)';
+  ctx.lineWidth = 30;
+  ctx.beginPath();
+  ctx.moveTo(292, 396);
+  ctx.lineTo(36, 150);
+  ctx.stroke();
+}
+
+function drawArmsPistol() {
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = '#5b6244';
+  ctx.lineWidth = 92;
+  ctx.beginPath();
+  ctx.moveTo(250, 350);
+  ctx.lineTo(84, -4);
+  ctx.stroke();
+
+  ctx.strokeStyle = '#4e5540';
+  ctx.lineWidth = 84;
+  ctx.beginPath();
+  ctx.moveTo(-140, 380);
+  ctx.lineTo(-34, 30);
+  ctx.stroke();
+
+  ctx.strokeStyle = 'rgba(0,0,0,0.18)';
+  ctx.lineWidth = 30;
+  ctx.beginPath();
+  ctx.moveTo(208, 268);
+  ctx.lineTo(112, 60);
+  ctx.stroke();
+}
+
+function drawAK47() {
+  drawArms();
+  ctx.save();
+  ctx.rotate(RIFLE_ANGLE);
+  drawRifleBody();
+  drawRifleHands();
+  ctx.restore();
+}
+
+function drawPistol() {
+  drawArmsPistol();
+  drawPistolBody();
+  drawPistolHands();
+}
+
+function drawShotgun() {
+  drawArms();
+  ctx.save();
+  ctx.rotate(SHOTGUN_ANGLE);
+  drawShotgunBody();
+  drawShotgunHands();
+  ctx.restore();
+}
+
+function drawRifleBody() {
+  ctx.lineCap = 'butt';
+  ctx.lineJoin = 'miter';
+
+  // ---- barrel, gas tube, front sight, muzzle brake ----
+  const steel = ctx.createLinearGradient(0, -40, 0, 26);
+  steel.addColorStop(0, '#5b6572');
+  steel.addColorStop(0.42, '#333a43');
+  steel.addColorStop(1, '#191d22');
+
+  rrect(-370, -16, 128, 20, 7);
+  ctx.fillStyle = steel;
+  ctx.fill();
+
+  rrect(-302, -40, 138, 18, 7);
+  ctx.fillStyle = '#262c33';
+  ctx.fill();
+
+  ctx.fillStyle = '#1b1f25';
+  ctx.beginPath();
+  ctx.moveTo(-356, -16);
+  ctx.lineTo(-322, -16);
+  ctx.lineTo(-338, -56);
+  ctx.closePath();
+  ctx.fill();
+  rrect(-343, -62, 10, 14, 4);
+  ctx.fill();
+
+  rrect(-390, -24, 28, 36, 7);
+  ctx.fillStyle = '#14181d';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(-378, -6, 7, 0, TAU);
+  ctx.fillStyle = '#04060a';
+  ctx.fill();
+
+  // ---- wooden handguard ----
+  const wood = ctx.createLinearGradient(0, -34, 0, 52);
+  wood.addColorStop(0, '#8d5b2b');
+  wood.addColorStop(0.5, '#6b421e');
+  wood.addColorStop(1, '#452812');
+
+  rrect(-258, -32, 140, 34, 10);
+  ctx.fillStyle = wood;
+  ctx.fill();
+  rrect(-252, 8, 128, 32, 10);
+  ctx.fillStyle = wood;
+  ctx.fill();
+
+  ctx.strokeStyle = 'rgba(0,0,0,0.22)';
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 4; i++) {
+    ctx.beginPath();
+    ctx.moveTo(-238 + i * 32, -30);
+    ctx.lineTo(-244 + i * 32, 38);
+    ctx.stroke();
+  }
+
+  // ---- receiver ----
+  const body = ctx.createLinearGradient(0, -64, 0, 34);
+  body.addColorStop(0, '#4d5761');
+  body.addColorStop(0.42, '#31383f');
+  body.addColorStop(1, '#1b1f24');
+
+  rrect(-128, -32, 216, 66, 9);
+  ctx.fillStyle = body;
+  ctx.fill();
+  rrect(-124, -46, 198, 20, 6);
+  ctx.fillStyle = '#3e4751';
+  ctx.fill();
+  rrect(-98, -60, 32, 16, 4);
+  ctx.fillStyle = '#20242a';
+  ctx.fill();
+  rrect(-42, -26, 62, 20, 5);
+  ctx.fillStyle = '#101419';
+  ctx.fill();
+  rrect(-16, -22, 48, 10, 4);
+  ctx.fillStyle = '#525c69';
+  ctx.fill();
+
+  // ---- pistol grip ----
+  ctx.save();
+  ctx.translate(-6, 26);
+  ctx.rotate(0.22);
+  const grip = ctx.createLinearGradient(-26, 0, 28, 124);
+  grip.addColorStop(0, '#3a3226');
+  grip.addColorStop(1, '#1b1712');
+  rrect(-26, 0, 52, 124, 16);
+  ctx.fillStyle = grip;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+  ctx.lineWidth = 2.5;
+  for (let i = 0; i < 4; i++) {
+    ctx.beginPath();
+    ctx.moveTo(-19, 24 + i * 25);
+    ctx.lineTo(19, 30 + i * 25);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // ---- trigger guard + trigger ----
+  ctx.strokeStyle = '#242a31';
+  ctx.lineWidth = 11;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(-58, 30);
+  ctx.quadraticCurveTo(-64, 78, -16, 78);
+  ctx.quadraticCurveTo(16, 78, 22, 42);
+  ctx.stroke();
+  rrect(-32, 28, 13, 36, 5);
+  ctx.fillStyle = '#4d5763';
+  ctx.fill();
+
+  // ---- curved 30-round magazine ----
+  ctx.strokeStyle = '#1d211f';
+  ctx.lineWidth = 60;
+  ctx.beginPath();
+  ctx.moveTo(-112, 18);
+  ctx.quadraticCurveTo(-126, 86, -190, 118);
+  ctx.stroke();
+
+  ctx.strokeStyle = '#39402f';
+  ctx.lineWidth = 42;
+  ctx.beginPath();
+  ctx.moveTo(-112, 22);
+  ctx.quadraticCurveTo(-126, 90, -186, 118);
+  ctx.stroke();
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+  ctx.lineWidth = 9;
+  ctx.beginPath();
+  ctx.moveTo(-120, 30);
+  ctx.quadraticCurveTo(-134, 88, -180, 114);
+  ctx.stroke();
+
+  // ---- stock, running off the bottom-right corner ----
+  ctx.save();
+  ctx.translate(86, 8);
+  ctx.rotate(0.16);
+  const stock = ctx.createLinearGradient(0, -34, 0, 66);
+  stock.addColorStop(0, '#7d5027');
+  stock.addColorStop(1, '#3d2410');
+  rrect(0, -30, 220, 78, 14);
+  ctx.fillStyle = stock;
+  ctx.fill();
+  rrect(204, -34, 24, 88, 8);
+  ctx.fillStyle = '#181c21';
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawRifleHands() {
+  // support hand cupping the wooden handguard: slim fingers so the wood still reads
+  rrect(-238, 46, 112, 82, 26);
+  ctx.fillStyle = SKIN_C;
+  ctx.fill();
+  for (let i = 0; i < 3; i++) {
+    ctx.save();
+    ctx.translate(-226 + i * 27, -32);
+    rrect(-11, 0, 22, 58, 11);
+    ctx.fillStyle = i % 2 ? SKIN_A : SKIN_B;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(120,80,50,0.45)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // trigger hand wrapped around the pistol grip
+  ctx.save();
+  ctx.translate(-8, 58);
+  ctx.rotate(0.22);
+  rrect(-46, -40, 92, 104, 26);
+  ctx.fillStyle = SKIN_A;
+  ctx.fill();
+  for (let i = 0; i < 3; i++) {
+    ctx.save();
+    ctx.translate(-34, -22 + i * 26);
+    ctx.rotate(-0.14);
+    rrect(-26, -14, 78, 28, 14);
+    ctx.fillStyle = i % 2 ? SKIN_B : SKIN_A;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(120,80,50,0.45)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+  }
+  ctx.save();
+  ctx.translate(8, -40);
+  ctx.rotate(0.5);
+  rrect(-16, -34, 32, 76, 16);
+  ctx.fillStyle = SKIN_C;
+  ctx.fill();
+  ctx.restore();
+  ctx.restore();
+}
+
+/* ---- pistol (from the first-person pistol build) ---- */
+function drawPistolBody() {
+  // grip
+  ctx.save();
+  ctx.translate(30, -120);
+  ctx.rotate(0.34);
+  const gg = ctx.createLinearGradient(-32, -78, 30, 98);
+  gg.addColorStop(0, '#2f353f');
+  gg.addColorStop(1, '#14181e');
+  rrect(-32, -78, 62, 176, 16);
+  ctx.fillStyle = gg;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 6; i++) {
+    ctx.beginPath();
+    ctx.moveTo(-24, -36 + i * 22);
+    ctx.lineTo(22, -42 + i * 22);
+    ctx.stroke();
+  }
+  rrect(-34, 92, 66, 16, 6);
+  ctx.fillStyle = '#0f1318';
+  ctx.fill();
+  ctx.restore();
+
+  // frame
+  rrect(-196, -206, 238, 30, 8);
+  ctx.fillStyle = '#333b44';
+  ctx.fill();
+
+  // trigger guard + trigger
+  ctx.strokeStyle = '#2c323b';
+  ctx.lineWidth = 12;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(-108, -182);
+  ctx.quadraticCurveTo(-122, -132, -66, -132);
+  ctx.quadraticCurveTo(-30, -132, -26, -170);
+  ctx.stroke();
+  rrect(-86, -178, 14, 40, 6);
+  ctx.fillStyle = '#4a525e';
+  ctx.fill();
+
+  // slide
+  const sg = ctx.createLinearGradient(0, -264, 0, -200);
+  sg.addColorStop(0, '#525b6a');
+  sg.addColorStop(0.42, '#353d48');
+  sg.addColorStop(1, '#1f242b');
+  rrect(-236, -262, 258, 58, 12);
+  ctx.fillStyle = sg;
+  ctx.fill();
+
+  // ejection port + serrations
+  rrect(-150, -252, 64, 22, 5);
+  ctx.fillStyle = '#12161c';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.42)';
+  ctx.lineWidth = 3;
+  for (let i = 0; i < 6; i++) {
+    ctx.beginPath();
+    ctx.moveTo(-8 + i * 6, -256);
+    ctx.lineTo(-12 + i * 6, -210);
+    ctx.stroke();
+  }
+
+  // sights
+  rrect(-228, -273, 14, 14, 3);
+  ctx.fillStyle = '#101419';
+  ctx.fill();
+  rrect(-6, -273, 14, 14, 3);
+  ctx.fill();
+
+  // barrel + muzzle opening
+  rrect(-246, -247, 18, 28, 6);
+  ctx.fillStyle = '#0c0f14';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(-237, -233, 6.5, 0, TAU);
+  ctx.fillStyle = '#04060a';
+  ctx.fill();
+}
+
+function drawPistolHands() {
+  // support hand under the frame
+  ctx.save();
+  ctx.translate(-86, -152);
+  ctx.rotate(0.18);
+  rrect(-46, -12, 88, 84, 28);
+  ctx.fillStyle = SKIN_C;
+  ctx.fill();
+  for (let i = 0; i < 3; i++) {
+    ctx.save();
+    ctx.translate(26, -4 + i * 27);
+    ctx.rotate(0.22 - i * 0.05);
+    rrect(-22, -13, 68, 26, 13);
+    ctx.fillStyle = i % 2 ? SKIN_A : SKIN_B;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(120,80,50,0.45)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+  }
+  ctx.restore();
+
+  // trigger hand on the grip
+  ctx.save();
+  ctx.translate(26, -116);
+  ctx.rotate(0.34);
+  rrect(-42, -48, 86, 110, 26);
+  ctx.fillStyle = SKIN_A;
+  ctx.fill();
+  for (let i = 0; i < 3; i++) {
+    ctx.save();
+    ctx.translate(-32, -24 + i * 26);
+    ctx.rotate(-0.16);
+    rrect(-26, -13, 74, 26, 13);
+    ctx.fillStyle = i % 2 ? SKIN_B : SKIN_A;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(120,80,50,0.45)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+  }
+  ctx.save();
+  ctx.translate(-14, -54);
+  ctx.rotate(0.5);
+  rrect(-15, -34, 30, 72, 15);
+  ctx.fillStyle = SKIN_C;
+  ctx.fill();
+  ctx.restore();
+  ctx.restore();
+}
+
+/* ---- pump-action shotgun ---- */
+function drawShotgunBody() {
+  ctx.lineCap = 'butt';
+  ctx.lineJoin = 'miter';
+
+  const steel = ctx.createLinearGradient(0, -44, 0, 24);
+  steel.addColorStop(0, '#6a7481');
+  steel.addColorStop(0.42, '#3a424b');
+  steel.addColorStop(1, '#1a1e23');
+
+  const wood = ctx.createLinearGradient(0, -40, 0, 56);
+  wood.addColorStop(0, '#8d5b2b');
+  wood.addColorStop(0.5, '#6b421e');
+  wood.addColorStop(1, '#452812');
+
+  // ---- barrel, ventilated rib, front bead ----
+  rrect(-400, -26, 244, 26, 8);
+  ctx.fillStyle = steel;
+  ctx.fill();
+  rrect(-404, -33, 252, 8, 3);
+  ctx.fillStyle = '#2a3038';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(-386, -38, 5, 0, TAU);
+  ctx.fillStyle = '#e8d98a';
+  ctx.fill();
+
+  // ---- under-barrel magazine tube + barrel band ----
+  rrect(-386, 4, 232, 22, 9);
+  ctx.fillStyle = '#242a32';
+  ctx.fill();
+  rrect(-346, -30, 16, 60, 5);
+  ctx.fillStyle = '#39414b';
+  ctx.fill();
+
+  // ---- wooden pump forend ----
+  rrect(-308, -8, 116, 54, 16);
+  ctx.fillStyle = wood;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.24)';
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 4; i++) {
+    ctx.beginPath();
+    ctx.moveTo(-290 + i * 26, -6);
+    ctx.lineTo(-296 + i * 26, 44);
+    ctx.stroke();
+  }
+
+  // ---- receiver ----
+  const body = ctx.createLinearGradient(0, -70, 0, 40);
+  body.addColorStop(0, '#4d5761');
+  body.addColorStop(0.42, '#31383f');
+  body.addColorStop(1, '#1b1f24');
+  rrect(-192, -40, 176, 80, 10);
+  ctx.fillStyle = body;
+  ctx.fill();
+  rrect(-188, -52, 158, 18, 6);
+  ctx.fillStyle = '#3e4751';
+  ctx.fill();
+  rrect(-116, -28, 62, 24, 6);        // loading port
+  ctx.fillStyle = '#101419';
+  ctx.fill();
+  rrect(-48, -26, 50, 22, 5);         // ejection port
+  ctx.fillStyle = '#141920';
+  ctx.fill();
+
+  // ---- spare shells carried on the receiver ----
+  for (let i = 0; i < 2; i++) {
+    rrect(-176 + i * 26, 26, 20, 32, 6);
+    ctx.fillStyle = '#a63f2c';
+    ctx.fill();
+    rrect(-176 + i * 26, 50, 20, 9, 4);
+    ctx.fillStyle = '#c8a24a';
+    ctx.fill();
+  }
+
+  // ---- trigger guard + trigger ----
+  ctx.strokeStyle = '#242a31';
+  ctx.lineWidth = 11;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(-104, 34);
+  ctx.quadraticCurveTo(-118, 86, -62, 86);
+  ctx.quadraticCurveTo(-24, 86, -20, 40);
+  ctx.stroke();
+  rrect(-84, 30, 13, 42, 6);
+  ctx.fillStyle = '#4a525e';
+  ctx.fill();
+
+  // ---- pistol grip ----
+  ctx.save();
+  ctx.translate(-4, 34);
+  ctx.rotate(0.3);
+  rrect(-28, 0, 56, 124, 17);
+  ctx.fillStyle = wood;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.28)';
+  ctx.lineWidth = 2.5;
+  for (let i = 0; i < 4; i++) {
+    ctx.beginPath();
+    ctx.moveTo(-20, 26 + i * 24);
+    ctx.lineTo(20, 32 + i * 24);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // ---- butt stock ----
+  rrect(60, -38, 186, 76, 20);
+  ctx.fillStyle = wood;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(96, -28);
+  ctx.lineTo(228, -28);
+  ctx.stroke();
+  rrect(236, -46, 30, 92, 11);        // recoil pad
+  ctx.fillStyle = '#20242a';
+  ctx.fill();
+}
+
+function drawShotgunHands() {
+  // support hand wrapped around the wooden pump
+  rrect(-286, 24, 118, 88, 28);
+  ctx.fillStyle = SKIN_C;
+  ctx.fill();
+  for (let i = 0; i < 3; i++) {
+    ctx.save();
+    ctx.translate(-272 + i * 28, -26);
+    rrect(-12, 0, 24, 62, 12);
+    ctx.fillStyle = i % 2 ? SKIN_A : SKIN_B;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(120,80,50,0.45)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // trigger hand on the pistol grip
+  ctx.save();
+  ctx.translate(-14, 62);
+  ctx.rotate(0.3);
+  rrect(-48, -42, 96, 108, 27);
+  ctx.fillStyle = SKIN_A;
+  ctx.fill();
+  for (let i = 0; i < 3; i++) {
+    ctx.save();
+    ctx.translate(-36, -24 + i * 26);
+    ctx.rotate(-0.14);
+    rrect(-26, -14, 80, 28, 14);
+    ctx.fillStyle = i % 2 ? SKIN_B : SKIN_A;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(120,80,50,0.45)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+  }
+  ctx.save();
+  ctx.translate(10, -42);
+  ctx.rotate(0.5);
+  rrect(-16, -34, 32, 78, 16);
+  ctx.fillStyle = SKIN_C;
+  ctx.fill();
+  ctx.restore();
+  ctx.restore();
+}
+
+/* ---- katana ----
+   Same local space as the guns: +y down, the wrists at the lower right. The
+   blade is drawn along +x and the group is turned up-left, so the edge sweeps
+   the upper left of the frame. The right mouse button brings it to the guard. */
+function drawKatanaArms(hx, hy) {
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = '#5b6244';
+  ctx.lineWidth = 94;
+  ctx.beginPath();
+  ctx.moveTo(300, 400);
+  ctx.lineTo(hx + 46, hy + 78);
+  ctx.stroke();
+  ctx.strokeStyle = '#4e5540';
+  ctx.lineWidth = 86;
+  ctx.beginPath();
+  ctx.moveTo(-40, 430);
+  ctx.lineTo(hx - 30, hy + 96);
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(0,0,0,0.16)';
+  ctx.lineWidth = 28;
+  ctx.beginPath();
+  ctx.moveTo(250, 330);
+  ctx.lineTo(hx + 40, hy + 96);
+  ctx.stroke();
+}
+
+function drawKatana() {
+  const aim = aimBlend();
+  const hx = -30 - aim * 46;
+  const hy = 60 - aim * 130;
+  drawKatanaArms(hx, hy);
+
+  ctx.save();
+  ctx.translate(hx, hy);
+  ctx.rotate(-2.02 - aim * 0.16);
+
+  // grip, wrapped
+  ctx.fillStyle = '#22262c';
+  rrect(-150, -19, 156, 38, 14);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(214, 226, 240, 0.55)';
+  ctx.lineWidth = 5;
+  for (let i = 0; i < 5; i++) {
+    const x = -138 + i * 30;
+    ctx.beginPath();
+    ctx.moveTo(x, -17);
+    ctx.lineTo(x + 16, 17);
+    ctx.moveTo(x + 16, -17);
+    ctx.lineTo(x, 17);
+    ctx.stroke();
+  }
+
+  // tsuba (guard)
+  ctx.beginPath();
+  ctx.ellipse(8, 0, 26, 12, 0, 0, TAU);
+  ctx.fillStyle = '#3d444d';
+  ctx.fill();
+  ctx.strokeStyle = '#c9a24a';
+  ctx.lineWidth = 4;
+  ctx.stroke();
+
+  // blade
+  const bx = 22, bl = 690;
+  ctx.beginPath();
+  ctx.moveTo(bx, -19);
+  ctx.quadraticCurveTo(bx + bl * 0.55, -27, bx + bl, -5);
+  ctx.quadraticCurveTo(bx + bl * 0.55, 9, bx + 5, 21);
+  ctx.closePath();
+  const g = ctx.createLinearGradient(bx, -22, bx, 24);
+  g.addColorStop(0, '#f2f7fd');
+  g.addColorStop(0.42, '#b7c6d8');
+  g.addColorStop(0.72, '#e6eef7');
+  g.addColorStop(1, '#8b9aab');
+  ctx.fillStyle = g;
+  ctx.fill();
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.9)';    // the temper line along the edge
+  ctx.lineWidth = 3.5;
+  ctx.beginPath();
+  ctx.moveTo(bx + 12, 15);
+  ctx.quadraticCurveTo(bx + bl * 0.55, 2, bx + bl - 8, -4);
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(bx, -18);
+  ctx.quadraticCurveTo(bx + bl * 0.55, -25, bx + bl, -5);
+  ctx.stroke();
+  ctx.restore();
+
+  // the blur of a swing, fading out after the cut
+  if (gun.recoil > 0.02) {
+    ctx.save();
+    ctx.globalAlpha = clamp(gun.recoil, 0, 1) * 0.4;
+    ctx.strokeStyle = '#eaf3ff';
+    ctx.lineWidth = 14;
+    ctx.beginPath();
+    ctx.arc(hx, hy, 430, -2.5 + aim * 0.2, -0.6 + aim * 0.2);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function drawMuzzleFlash() {
+  const w = currentGun();
+  const m = gunMuzzle();
+  const mx = m.x, my = m.y;
+  const a = clamp(gun.flash, 0, 1);
+  const r = (54 + 42 * a) * gunScale() * w.flashScale;
+
+  const g = ctx.createRadialGradient(mx, my, 0, mx, my, r * 1.7);
+  g.addColorStop(0, 'rgba(255, 250, 224, ' + (0.95 * a) + ')');
+  g.addColorStop(0.3, 'rgba(255, 206, 104, ' + (0.55 * a) + ')');
+  g.addColorStop(1, 'rgba(255, 150, 40, 0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(mx, my, r * 1.7, 0, TAU);
+  ctx.fill();
+
+  ctx.save();
+  ctx.translate(mx, my);
+  ctx.rotate(game.time * 22);
+  const spikes = w.flashSpikes;
+  ctx.beginPath();
+  for (let i = 0; i < spikes * 2; i++) {
+    const rad = i % 2 ? r * 0.4 : r * 1.1;
+    const ang = (i / (spikes * 2)) * TAU;
+    const px = Math.cos(ang) * rad;
+    const py = Math.sin(ang) * rad * 0.68;
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(255, 246, 206, ' + (0.92 * a) + ')';
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawGun() {
+  const t = gunTransform();
+  const s = gunScale();
+  ctx.save();
+  ctx.translate(t.x, t.y);
+  ctx.rotate(t.rot);
+  ctx.scale(s, s);
+  currentGun().draw();                 // arms + weapon in the weapon's own sub-frame
+  ctx.restore();
+  if (gun.flash > 0.001) drawMuzzleFlash();
+}
+
+/* =========================================================================
+   HUD + overlay + input + main loop
+   ========================================================================= */
+const els = {
+  level: document.getElementById('levelNum'),
+  targetProg: document.getElementById('targetProg'),
+  flagProg: document.getElementById('flagProg'),
+  enemyProg: document.getElementById('enemyProg'),
+  targetBar: document.getElementById('targetBar'),
+  flagBar: document.getElementById('flagBar'),
+  enemyBar: document.getElementById('enemyBar'),
+  score: document.getElementById('score'),
+  acc: document.getElementById('acc'),
+  slices: document.getElementById('sliceStat'),
+  ammo: document.getElementById('ammo'),
+  ammoBox: document.getElementById('ammoBox'),
+  hpBox: document.getElementById('hpBox'),
+  hpNum: document.getElementById('hpNum'),
+  hpBar: document.getElementById('hpBar'),
+  medBtn: document.getElementById('medBtn'),
+  medNum: document.getElementById('medNum'),
+  gunName: document.getElementById('gunName'),
+  gunBar: document.getElementById('gunBar'),
+  overlay: document.getElementById('overlay'),
+  ovTitle: document.getElementById('ovTitle'),
+  ovSub: document.getElementById('ovSub'),
+  ovBody: document.getElementById('ovBody'),
+  ovBtn: document.getElementById('ovBtn')
+};
+const MENU_HTML = els.ovBody.innerHTML;
+
+function setText(el, value) {
+  if (el && el.textContent !== value) el.textContent = value;
+}
+
+function updateHud() {
+  const w = currentGun();
+  setText(els.level, String(game.level));
+  setText(els.targetProg, game.targetsDone + ' / ' + game.targetsNeeded);
+  setText(els.flagProg, game.flagsDone + ' / ' + game.flagsNeeded);
+  setText(els.enemyProg, game.enemiesDone + ' / ' + game.enemiesNeeded);
+  setText(els.score, fmt(game.score));
+  setText(els.acc, game.shots ? Math.round(accuracy() * 100) + '%' : '—');
+  setText(els.slices, String(game.slices));
+  setText(els.ammo, w.melee ? '∞' : (gun.reloading > 0 ? '—' : String(gun.ammo)));
+  setText(els.gunName, w.name);
+  if (els.targetBar) els.targetBar.style.width = (game.targetsNeeded ? clamp(game.targetsDone / game.targetsNeeded, 0, 1) * 100 : 0) + '%';
+  if (els.flagBar) els.flagBar.style.width = (game.flagsNeeded ? clamp(game.flagsDone / game.flagsNeeded, 0, 1) * 100 : 0) + '%';
+  if (els.enemyBar) els.enemyBar.style.width = (game.enemiesNeeded ? clamp(game.enemiesDone / game.enemiesNeeded, 0, 1) * 100 : 0) + '%';
+  if (els.ammoBox) els.ammoBox.classList.toggle('empty', !w.melee && gun.ammo <= 0 && gun.reloading <= 0);
+
+  // health
+  const hp = Math.max(0, Math.round(game.hp));
+  setText(els.hpNum, String(hp));
+  setText(els.medNum, String(game.medKits));
+  if (els.hpBar) els.hpBar.style.width = clamp(game.hp / MAX_HP, 0, 1) * 100 + '%';
+  if (els.hpBox) {
+    els.hpBox.classList.toggle('hurt', game.hp <= MAX_HP * 0.6 && game.hp > MAX_HP * 0.3);
+    els.hpBox.classList.toggle('crit', game.hp <= MAX_HP * 0.3);
+  }
+  if (els.medBtn) els.medBtn.disabled = !(game.state === 'playing' && game.medKits > 0 && game.hp < MAX_HP && game.healing <= 0);
+
+  if (els.gunBar) {
+    for (let i = 0; i < els.gunBar.children.length; i++) {
+      const chip = els.gunBar.children[i];
+      chip.classList.toggle('is-on', chip.getAttribute('data-gun') === w.id);
+    }
+  }
+}
+
+function showOverlay(mode, data) {
+  els.overlay.classList.remove('hidden');
+  els.overlay.classList.toggle('hidden-chrome', mode !== 'menu');
+  if (mode === 'menu') {
+    els.ovTitle.textContent = 'Bullseye Range';
+    els.ovSub.textContent = 'A first-person shooting gallery';
+    els.ovBody.innerHTML = MENU_HTML;
+    els.ovBtn.textContent = 'Start shooting';
+    els.ovBtn.dataset.action = 'start';
+  } else if (mode === 'levelclear') {
+    els.ovTitle.textContent = 'Level ' + game.level + ' cleared';
+    els.ovSub.textContent = game.levelTime.toFixed(1) + 's · ' + Math.round(data.acc * 100) + '% accuracy';
+    els.ovBody.innerHTML =
+      '<div class="tally">' +
+      '<div><span>Level bonus</span><b>+' + data.clearBonus + '</b></div>' +
+      '<div><span>Accuracy bonus</span><b>+' + data.accBonus + '</b></div>' +
+      '<div><span>Speed bonus</span><b>+' + data.timeBonus + '</b></div>' +
+      '<div class="total"><span>New score</span><b>' + fmt(game.score) + '</b></div>' +
+      '</div>';
+    els.ovBtn.textContent = 'Next level →';
+    els.ovBtn.dataset.action = 'next';
+  } else if (mode === 'down') {
+    els.ovTitle.textContent = 'You are down';
+    els.ovSub.textContent = 'Level ' + game.level + ' · ' + data.kills + ' shooter' + (data.kills === 1 ? '' : 's') + ' put down';
+    els.ovBody.innerHTML =
+      '<div class="tally">' +
+      '<div><span>Score</span><b>' + fmt(game.score) + '</b></div>' +
+      '<div><span>Shooters put down</span><b>' + data.kills + '</b></div>' +
+      '<div><span>Shots deflected</span><b>' + data.deflects + '</b></div>' +
+      '<div><span>Rounds sliced</span><b>' + data.slices + '</b></div>' +
+      '<div class="total"><span>Accuracy</span><b>' + Math.round(data.acc * 100) + '%</b></div>' +
+      '</div>' +
+      '<p class="sub">A fresh level, full health and three med kits.</p>';
+    els.ovBtn.textContent = 'Have another go';
+    els.ovBtn.dataset.action = 'restart';
+  } else {
+    els.ovTitle.textContent = 'Paused';
+    els.ovSub.textContent = 'Level ' + game.level + ' · score ' + fmt(game.score);
+    els.ovBody.innerHTML = '<p>Take your time. The range will wait.</p>';
+    els.ovBtn.textContent = 'Resume';
+    els.ovBtn.dataset.action = 'resume';
+  }
+}
+
+function hideOverlay() {
+  els.overlay.classList.add('hidden');
+}
+
+els.ovBtn.addEventListener('click', function () {
+  const action = els.ovBtn.dataset.action;
+  if (action === 'start') startGame();
+  else if (action === 'next') nextLevel();
+  else if (action === 'restart') startGame();
+  else if (action === 'resume') togglePause();
+});
+
+if (els.gunBar) {
+  els.gunBar.addEventListener('click', function (e) {
+    const chip = e.target && e.target.closest ? e.target.closest('.gun-chip') : null;
+    if (chip) selectWeapon(chip.getAttribute('data-gun'));
+  });
+}
+
+if (els.medBtn) {
+  els.medBtn.addEventListener('click', function (e) {
+    e.preventDefault();
+    useMedKit();
+  });
+}
+
+/* ---------------- input ---------------- */
+const keys = Object.create(null);
+
+function setCross(x, y) {
+  cross.x = clamp(x, 6, W - 6);
+  cross.y = clamp(y, 6, H - 6);
+}
+
+window.addEventListener('mousemove', e => setCross(e.clientX, e.clientY));
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+canvas.addEventListener('mousedown', e => {
+  e.preventDefault();
+  if (e.button === 2) {            // right button: bring the gun up to the sights
+    setCross(e.clientX, e.clientY);
+    aiming = true;
+    return;
+  }
+  if (e.button !== 0) return;      // only the left button pulls the trigger
+  setCross(e.clientX, e.clientY);
+  triggerHeld = true;
+  fire();
+});
+window.addEventListener('mouseup', e => {
+  if (e.button === 2) aiming = false;
+  else triggerHeld = false;
+});
+window.addEventListener('blur', () => { triggerHeld = false; aiming = false; });
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  const t = e.changedTouches[0];
+  setCross(t.clientX, t.clientY);
+  triggerHeld = true;
+  fire();
+}, { passive: false });
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  const t = e.changedTouches[0];
+  setCross(t.clientX, t.clientY);
+}, { passive: false });
+const releaseTrigger = () => { triggerHeld = false; };
+canvas.addEventListener('touchend', releaseTrigger);
+canvas.addEventListener('touchcancel', releaseTrigger);
+
+window.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space'].indexOf(e.code) !== -1) e.preventDefault();
+  if (e.repeat) return;
+  const pickIdx = WEAPONS.findIndex(w => w.code === e.code);
+  if (pickIdx !== -1) selectWeapon(pickIdx);
+  else if (e.code === 'KeyQ') cycleWeapon(-1);
+  else if (e.code === 'KeyE') cycleWeapon(1);
+  else if (e.code === 'KeyR') startReload();
+  else if (e.code === 'KeyF') useMedKit();
+  else if (e.code === 'KeyP' || e.code === 'Escape') togglePause();
+  else if (e.code === 'Space') fire();
+  else if (e.code === 'Enter' && game.state === 'levelclear') nextLevel();
+  else if (e.code === 'Enter' && game.state === 'down') startGame();
+});
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  cycleWeapon(e.deltaY > 0 ? 1 : -1);
+}, { passive: false });
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; triggerHeld = false; });
+
+/* ---------------- per frame ---------------- */
+function updateCamera(dt) {
+  if (game.state !== 'playing' && game.state !== 'levelclear') return;
+  let turn = 0;
+  if (keys['KeyA'] || keys['ArrowLeft']) turn -= 1;
+  if (keys['KeyD'] || keys['ArrowRight']) turn += 1;
+  let rate = turn * 1.9;
+  if (turn === 0) {                                  // steer when the aim pushes the edge
+    if (cross.x < W * 0.07) rate = -1.5;
+    else if (cross.x > W * 0.93) rate = 1.5;
+  }
+  rate *= 1 - (1 - AIM_TURN) * aimBlend();           // steady down the sights
+  cam.yaw += rate * dt;
+  if (cam.yaw > Math.PI) cam.yaw -= TAU;
+  if (cam.yaw < -Math.PI) cam.yaw += TAU;
+  cam.pitch = damp(cam.pitch, 0, 6, dt);
+  cam.shake = Math.max(0, cam.shake - dt * 5.5);
+  cross.hover = game.state === 'playing' ? !!findHit() : false;
+}
+
+function step(dt) {
+  if (game.state !== 'paused') {
+    game.time += dt;
+    if (game.state === 'playing') game.levelTime += dt;
+    updateEntities(dt);
+    updateEffects(dt);
+    updateBullets(dt);
+    tickReload(dt);
+    tickHeal(dt);
+    if (game.state === 'playing' && (triggerHeld || keys['Space'])) fire();   // full-auto while held
+    gun.recoil = Math.max(0, gun.recoil - dt * 4.2);
+    gun.flash = Math.max(0, gun.flash - dt * 9);
+    game.sliceT = Math.max(0, game.sliceT - dt);     // the swing stops being live
+    // the sights come up and down at a steady speed
+    const aimTarget = (aiming && game.state === 'playing') ? 1 : 0;
+    gun.aim += clamp(aimTarget - gun.aim, -dt / 0.16, dt / 0.16);
+    updateCamera(dt);
+  }
+  game.hurtFlash = Math.max(0, game.hurtFlash - dt * 1.6);
+  if (game.state === 'levelclear') {
+    game.clearTimer -= dt;
+    if (game.clearTimer <= 0) nextLevel();
+  }
+  updateHud();
+}
+
+let lastStamp = 0;
+function frame(now) {
+  if (!lastStamp) lastStamp = now;
+  const dt = clamp((now - lastStamp) / 1000, 0.001, 0.05);
+  lastStamp = now;
+  step(dt);
+  render();
+  requestAnimationFrame(frame);
+}
+
+/* ---------------- boot ---------------- */
+cross.x = W * 0.5;
+cross.y = H * 0.42;
+spawnLevel(1);
+game.state = 'menu';
+showOverlay('menu');
+updateHud();
+requestAnimationFrame(frame);
+
+/* Debug / test hook (harmless in play): lets automation aim and inspect state. */
+window.__range = {
+  game: game, cam: cam, cross: cross, gun: gun,
+  weapons: WEAPONS, currentGun: currentGun, selectWeapon: selectWeapon, cycleWeapon: cycleWeapon,
+  get gunIndex() { return gunIndex; },
+  project: project, hitTest: hitTest, findHit: findHit, fire: fire,
+  startGame: startGame, nextLevel: nextLevel, spawnLevel: spawnLevel,
+  startReload: startReload, completeLevel: completeLevel,
+  drawGun: drawGun, gunTransform: gunTransform, gunScale: gunScale,
+  get triggerHeld() { return triggerHeld; },
+  focalLength: focalLength, gunMuzzle: gunMuzzle, targetFace: targetFace, flagShape: flagShape,
+  entityPoint: function (e) {
+    if (e.type === 'target') {
+      const f = targetFace(e);
+      return f ? { x: f.x, y: f.y } : null;
+    }
+    if (e.type === 'enemy') {
+      const f = enemyFace(e);
+      return f ? { x: f.x, y: f.bot - e.h * f.k * 0.62 } : null;   // chest height
+    }
+    const s = flagShape(e);
+    return s ? { x: s.pTop.x + s.w * 0.45, y: s.pTop.y + s.h * 0.5 } : null;
+  },
+  nearest: function (type) {
+    let best = null;
+    for (let i = 0; i < game.entities.length; i++) {
+      const e = game.entities[i];
+      if (e.state !== 'alive') continue;
+      if (type && e.type !== type) continue;
+      const ex = e.type === 'flag' ? e.x : e.hx, ez = e.type === 'flag' ? e.z : e.hz;
+      const d = depthOf(ex, ez);
+      if (!best || d < best.d) best = { e: e, d: d };
+    }
+    return best ? best.e : null;
+  },
+  // new-feature hooks for the headless tests
+  enemyFace: enemyFace, enemyFire: enemyFire, slash: slash, resolveBullet: resolveBullet,
+  useMedKit: useMedKit, tickHeal: tickHeal, updateBullets: updateBullets, hurt: hurt,
+  guarding: guarding, deflectsShot: deflectsShot, playerDown: playerDown,
+  sliceBullet: sliceBullet, inSliceReach: inSliceReach, sliceReach: SLICE_REACH,
+  // a round put on the range by hand, for the headless tests
+  spawnBullet: function (opts) {
+    opts = opts || {};
+    const a = opts.angle === undefined ? 0 : opts.angle;       // 0 = straight ahead
+    const d = opts.dist === undefined ? 8 : opts.dist;
+    const x = cam.x + Math.sin(a) * d, z = cam.z + Math.cos(a) * d;
+    const b = {
+      x0: x, y0: 1.45, z0: z, x: x, y: 1.45, z: z,
+      tx: cam.x, ty: cam.y - 0.34, tz: cam.z,
+      dist: 0, travelled: 0, speed: opts.speed || 95,
+      aimed: opts.aimed === undefined ? true : !!opts.aimed, life: 1.6
+    };
+    b.dist = Math.hypot(b.tx - b.x0, b.ty - b.y0, b.tz - b.z0);
+    game.bullets.push(b);
+    return b;
+  },
+  render: render, drawEnemy: drawEnemy, drawKatana: drawKatana,
+  setAiming: function (on) { aiming = !!on; },
+  get aiming() { return aiming; },
+  setHp: function (v) { game.hp = clamp(v, 0, MAX_HP); updateHud(); },
+  bullets: function () { return game.bullets; }
+};
+

@@ -1,0 +1,419 @@
+:root {
+  --ink: #eef2f7;
+  --dim: #a9b4c4;
+  --red: #ff5a4d;
+  --blue: #57b8ff;
+  --gold: #ffcb47;
+  --panel: rgba(14, 19, 28, 0.62);
+  --stroke: rgba(255, 255, 255, 0.12);
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #0b1017;
+  color: var(--ink);
+  font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#game {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  cursor: none;
+  touch-action: none;
+}
+
+/* ---------------- HUD ---------------- */
+#hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.hud-top {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 12px 14px;
+}
+
+.hud-bottom {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--stroke);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  padding: 9px 13px;
+}
+
+.label {
+  display: block;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.big { font-size: 30px; font-weight: 700; line-height: 1; }
+
+.level-panel { text-align: center; min-width: 84px; }
+
+.missions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 230px;
+}
+
+.mission {
+  display: grid;
+  grid-template-columns: 16px 1fr auto;
+  grid-template-rows: auto 5px;
+  align-items: center;
+  gap: 3px 8px;
+}
+
+.mission .mname { font-size: 12px; letter-spacing: 0.05em; color: var(--dim); }
+.mission .mcount { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+.mission .bar {
+  grid-column: 1 / -1;
+  display: block;
+  height: 5px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+.mission .bar > i {
+  display: block;
+  height: 100%;
+  width: 0%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, #ff8a5c, var(--red));
+  transition: width 0.25s ease;
+}
+
+.mission:nth-child(2) .bar > i {
+  background: linear-gradient(90deg, #7fd4ff, var(--blue));
+}
+
+.mission:nth-child(3) .bar > i {
+  background: linear-gradient(90deg, #ffd166, #ff7a45);
+}
+
+.icon {
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.icon-target {
+  background: radial-gradient(circle, #ff5a4d 0 28%, #fff 28% 46%, #ff5a4d 46% 68%, #fff 68% 100%);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35) inset;
+}
+
+.icon-flag {
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--blue) 0 55%, #1b6fa8 55% 100%);
+  clip-path: polygon(0 0, 100% 12%, 100% 88%, 0 100%);
+}
+
+/* a shooter: head over shoulders */
+.icon-enemy {
+  border-radius: 3px;
+  background:
+    radial-gradient(circle at 50% 26%, #f0c9a4 0 26%, rgba(0, 0, 0, 0) 27%),
+    linear-gradient(180deg, rgba(0, 0, 0, 0) 44%, #6c7a8c 45% 100%);
+  box-shadow: 0 0 0 1px rgba(255, 209, 102, 0.5) inset;
+}
+
+.stats { display: flex; gap: 16px; text-align: right; }
+.stat { display: flex; flex-direction: column; }
+.stat > span:last-child { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+.ammo-box {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+}
+.ammo-box #ammo { font-size: 26px; font-weight: 800; line-height: 1; }
+.ammo-box .reload-hint {
+  font-size: 11px;
+  color: var(--gold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.ammo-box.empty #ammo { color: var(--red); }
+.ammo-box.empty .reload-hint { opacity: 1; }
+
+.hints { font-size: 11px; color: var(--dim); }
+
+/* ---------------- weapon picker ---------------- */
+.gun-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: auto;   /* the HUD ignores clicks, but these chips are buttons */
+}
+.gun-name { color: var(--gold); font-weight: 800; letter-spacing: 0.06em; }
+.gun-bar { display: flex; gap: 6px; }
+.gun-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dim);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--stroke);
+  border-radius: 9px;
+  padding: 5px 9px;
+  cursor: pointer;
+  transition: color 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+}
+.gun-chip b {
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--dim);
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+.gun-chip:hover { color: var(--ink); background: rgba(255, 255, 255, 0.11); }
+.gun-chip.is-on {
+  color: #0d1219;
+  background: var(--gold);
+  border-color: var(--gold);
+}
+.gun-chip.is-on b { color: #0d1219; background: rgba(0, 0, 0, 0.16); }
+
+/* ---------------- health & med kit ---------------- */
+.health-box {
+  display: grid;
+  grid-template-columns: auto auto;
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 3px 8px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: auto;
+}
+.health-box > .label { grid-column: 1 / -1; }
+.health-box #hpNum { font-size: 22px; font-weight: 800; line-height: 1; }
+.health-box .hp-bar {
+  display: block;
+  width: 108px;
+  height: 7px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+.health-box .hp-bar > i {
+  display: block;
+  height: 100%;
+  width: 100%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, #6ee7a8, #37c46f);
+  transition: width 0.18s ease, background 0.25s ease;
+}
+.health-box.hurt #hpNum { color: var(--gold); }
+.health-box.hurt .hp-bar > i { background: linear-gradient(90deg, #ffd166, #ff9f43); }
+.health-box.crit #hpNum { color: var(--red); }
+.health-box.crit .hp-bar > i { background: linear-gradient(90deg, #ff8a5c, var(--red)); }
+
+.med-chip {
+  grid-column: 1 / -1;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dim);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--stroke);
+  border-radius: 9px;
+  padding: 4px 9px;
+  cursor: pointer;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+.med-chip b {
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--dim);
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+.med-chip:hover:not(:disabled) { color: var(--ink); background: rgba(255, 255, 255, 0.11); }
+.med-chip:disabled { opacity: 0.42; cursor: default; }
+.med-chip #medNum { color: #6ee7a8; font-weight: 800; }
+
+@media (max-width: 720px) {
+  .missions { min-width: 160px; }
+  .hints { display: none; }
+  .big { font-size: 22px; }
+  .stats .stat-sliced { display: none; }
+  .gun-chip { padding: 4px 7px; font-size: 11px; }
+}
+
+/* ---------------- overlay ---------------- */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: radial-gradient(ellipse at 50% 40%, rgba(8, 12, 20, 0.55), rgba(4, 7, 12, 0.9));
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+
+.overlay.hidden { display: none; }
+.overlay.hidden-chrome { background: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+.overlay.hidden-chrome .card {
+  background: rgba(10, 14, 22, 0.72);
+  border-color: rgba(255, 255, 255, 0.16);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.6);
+}
+
+.card {
+  max-width: 520px;
+  width: 100%;
+  background: rgba(11, 16, 24, 0.86);
+  border: 1px solid var(--stroke);
+  border-radius: 20px;
+  box-shadow: var(--shadow);
+  padding: 26px 28px 24px;
+  text-align: center;
+  cursor: default;
+}
+
+.card h1 {
+  margin: 0 0 4px;
+  font-size: clamp(26px, 5vw, 38px);
+  letter-spacing: -0.02em;
+}
+
+.card .sub {
+  margin: 0 0 16px;
+  color: var(--dim);
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.card p { margin: 10px 0; font-size: 14.5px; line-height: 1.55; color: #d7dfea; }
+.c-red { color: var(--red); }
+.c-blue { color: var(--blue); }
+.c-gold { color: var(--gold); }
+
+.keys {
+  list-style: none;
+  margin: 18px 0 20px;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--dim);
+  text-align: left;
+}
+.keys li { display: flex; align-items: center; gap: 7px; }
+
+.tally {
+  margin: 18px 0 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.tally > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13.5px;
+  color: var(--dim);
+  padding: 7px 13px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+}
+.tally > div b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.tally > .total {
+  background: rgba(255, 203, 71, 0.15);
+  color: var(--ink);
+  font-weight: 700;
+}
+.tally > .total b { color: var(--gold); font-size: 16px; }
+
+kbd {
+  background: rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  padding: 2px 7px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--ink);
+}
+
+.btn {
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  padding: 13px 30px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #08111c;
+  background: linear-gradient(180deg, #ffe07a, var(--gold));
+  box-shadow: 0 8px 22px rgba(255, 203, 71, 0.28);
+  cursor: pointer;
+  transition: transform 0.12s ease, filter 0.12s ease;
+}
+.btn:hover { filter: brightness(1.07); transform: translateY(-1px); }
+.btn:active { transform: translateY(1px); }
+
+/* ---------------- error box (debug aid) ---------------- */
+.err {
+  position: fixed;
+  left: 12px; bottom: 12px;
+  z-index: 50;
+  max-width: 60ch;
+  background: rgba(60, 8, 8, 0.92);
+  border: 1px solid #ff6b6b;
+  color: #ffd9d9;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 8px 10px;
+  border-radius: 8px;
+  white-space: pre-wrap;
+}
