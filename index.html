@@ -42,6 +42,7 @@
       <div class="stat"><span class="label">SCORE</span><span id="score">0</span></div>
       <div class="stat stat-sliced"><span class="label">SLICED</span><span id="sliceStat">0</span></div>
       <div class="stat stat-energy"><span class="label">ENERGY</span><span id="energyStat">0 / 3</span></div>
+      <div class="stat stat-rounds"><span class="label">ROUNDS</span><span id="roundStat">0 / 3</span></div>
       <div class="stat"><span class="label">ACCURACY</span><span id="acc">—</span></div>
     </div>
   </div>
@@ -55,6 +56,7 @@
         <button class="gun-chip" type="button" data-gun="shotgun"><b>3</b> Shotgun</button>
         <button class="gun-chip" type="button" data-gun="katana"><b>4</b> Katana</button>
         <button class="gun-chip" type="button" data-gun="energy"><b>5</b> Energy pistols</button>
+        <button class="gun-chip" type="button" data-gun="sniper"><b>6</b> Sniper</button>
       </div>
     </div>
 
@@ -69,9 +71,9 @@
       <span class="label">AMMO</span>
       <span id="ammo">30</span>
       <span class="reload-hint" id="reloadHint">press R</span>
-      <span class="charge-hint">charged</span>
+      <span class="charge-hint" id="chargeHint">charged</span>
     </div>
-    <div class="panel hints">Left click fires &middot; right click aims &middot; with the katana, right click sends their bullets back at them and swinging slices them &middot; 1 / 2 / 3 / 4 / 5 (or wheel) switch gun &middot; F med kit &middot; R reloads &middot; A / D turn &middot; P pause</div>
+    <div class="panel hints">Left click fires &middot; right click aims (the sniper raises a scope) &middot; with the katana, right click sends their bullets back at them and swinging slices them &middot; 1 / 2 / 3 / 4 / 5 / 6 (or wheel) switch gun &middot; F med kit &middot; R reloads &middot; A / D turn &middot; P pause</div>
   </div>
 </div>
 
@@ -87,6 +89,9 @@
         cell</b> where he fell &mdash; it drifts into your hands on its own. Three cells load the
         <b class="c-blue">energy pistols</b> (key <kbd>5</kbd>) and for the rest of the round they
         fire without ever running out. The cells do not carry over: each round you earn them again.</p>
+      <p>The same bargain buys the <b class="c-gold">sniper rifle</b> (key <kbd>6</kbd>) &mdash; only
+        the shooters leave <b class="c-gold">cartridge rounds</b> instead of cells. Three rounds load
+        it; right click puts your eye to the scope.</p>
       <p>Hit every quota to move on to the next level. Higher levels add more&mdash;and faster&mdash;
         targets, flags and gunmen. Take a round and your health drops; <kbd>F</kbd> patches
         you up with a med kit. The katana cuts them down if you get close enough, and if you
@@ -97,7 +102,7 @@
         <li><kbd>Mouse</kbd> aim the crosshair</li>
         <li><kbd>Left click</kbd> fire &mdash; hold it down to keep firing</li>
         <li><kbd>Right click</kbd> aim down the sights (with the katana: raise the guard and send their rounds back at them)</li>
-        <li><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd><kbd>5</kbd> AK-47 &middot; pistol &middot; shotgun &middot; katana &middot; energy pistols</li>
+        <li><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd><kbd>5</kbd><kbd>6</kbd> AK-47 &middot; pistol &middot; shotgun &middot; katana &middot; energy pistols &middot; sniper</li>
         <li><kbd>F</kbd> med kit &middot; <kbd>R</kbd> reload &middot; <kbd>A</kbd><kbd>D</kbd> turn &middot; <kbd>P</kbd> pause</li>
       </ul>
     </div>
