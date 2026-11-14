@@ -366,6 +366,9 @@ function project(x, y, z) {
 
 function horizonY() { return H * 0.5 + focalLength() * Math.tan(cam.pitch); }
 
+const RIFLE_ANGLE = 0.9;      // how far the rifle's sub-frame is canted up-left at the hip
+const SHOTGUN_ANGLE = 0.86;   // ...and how far the shotgun's is
+
 /* ---------------- weapons ----------------
    Each weapon carries its own stats, its own transform inside the view frame and
    its own artwork. `ammo` is remembered per weapon, so switching away and back
@@ -380,6 +383,7 @@ const WEAPONS = [
     flashScale: 1, flashSpikes: 5,
     anchorX: 0.62, anchorY: 0.93, baseRot: -0.34,
     sightLine: true,                           // right-click: held square on the aim point
+    tilt: RIFLE_ANGLE,                         // ...and the art's own pitch taken out, so it is level
     recoilRise: 0.035, reloadRise: 0.30, reloadTilt: 0.34,
     muzzle: { x: -219, y: -286 },              // = rotate(-360, -6) by RIFLE_ANGLE
     draw: drawAK47, sound: 'shot', ammo: 30
@@ -392,6 +396,7 @@ const WEAPONS = [
     flashScale: 0.72, flashSpikes: 5,
     anchorX: 0.62, anchorY: 0.93, baseRot: -0.34,
     sightLine: true,
+    tilt: 0,                                   // its art is already drawn level
     recoilRise: 0.035, reloadRise: 0.30, reloadTilt: 0.34,
     muzzle: { x: -238, y: -233 },
     draw: drawPistol, sound: 'shot', ammo: 12
@@ -404,6 +409,7 @@ const WEAPONS = [
     flashScale: 1.5, flashSpikes: 7,
     anchorX: 0.60, anchorY: 0.95, baseRot: -0.30,
     sightLine: true,
+    tilt: SHOTGUN_ANGLE,
     recoilRise: 0.05, reloadRise: 0.32, reloadTilt: 0.30,
     muzzle: { x: -249, y: -314 },
     draw: drawShotgun, sound: 'boom', ammo: 6
@@ -427,12 +433,16 @@ const WEAPONS = [
     // Earned rather than reloaded: three energy cells pried off the shooters you
     // drop charge this pair up, and while charged they never run dry.
     id: 'energy', name: 'Energy pistols', key: '5', code: 'Digit5',
-    energy: true, mag: 0, reload: 0, interval: 0.13,
+    energy: true, mag: 0, reload: 0, interval: 0.06,
     pellets: 1, spread: 0,
-    recoil: 0.62, kick: 0.0021, shake: 0.6,
+    pierce: 3,                                 // one bolt runs through what it meets
+    recoil: 0.40, kick: 0.0014, shake: 0.45,
     flashScale: 1.05, flashSpikes: 6, bolt: true,
     anchorX: 0.60, anchorY: 0.95, baseRot: -0.26,
     sightLine: true,
+    tilt: 0.35,                                // pitch the pistol art is built with
+    pivot: { x: -140, y: 30 },                 // ...turned about the right hand's grip
+    altPivot: { x: 140, y: 30 },               // ...and the left's, mirrored
     recoilRise: 0.03, reloadRise: 0, reloadTilt: 0,
     muzzle: { x: -270, y: -231 },              // right-hand pistol
     altMuzzle: { x: 270, y: -231 },            // ...and the left: shots trade hands
@@ -1134,15 +1144,23 @@ function hitTest(e) {
   return { x: cross.x, y: cross.y, depth: s.depth };
 }
 
-function findHit() {
-  let best = null;
+// Every alive thing under the crosshair, nearest first. A single-shot weapon only
+// cares about the first; a bolt that carries through reads the whole list.
+function findHits() {
+  const hits = [];
   for (let i = 0; i < game.entities.length; i++) {
     const e = game.entities[i];
     if (e.state !== 'alive') continue;
     const h = hitTest(e);
-    if (h && (!best || h.depth < best.hit.depth)) best = { e: e, hit: h };
+    if (h) hits.push({ e: e, hit: h });
   }
-  return best;
+  hits.sort(function (a, b) { return a.hit.depth - b.hit.depth; });
+  return hits;
+}
+
+function findHit() {
+  const hits = findHits();
+  return hits.length ? hits[0] : null;
 }
 
 /* ---------------- effects ---------------- */
@@ -1317,17 +1335,25 @@ function fire() {
       cross.x = aimX + rand(-1, 1) * spread * W;
       cross.y = aimY + rand(-1, 1) * spread * W;
     }
-    const found = findHit();
+    const founds = findHits();
+    const found = founds.length ? founds[0] : null;
     const dx = cross.x - muzzle.x, dy = cross.y - muzzle.y;
     const len = Math.hypot(dx, dy) || 1;
     const impact = found ? found.hit : { x: cross.x + (dx / len) * 170, y: cross.y + (dy / len) * 170, depth: 999 };
     addTracer(muzzle, impact, !!found, w.bolt ? 'bolt' : null);
 
     if (!found) { burst(cross.x, cross.y, '#cfd6e0', w.pellets > 1 ? 2 : 6, 180); continue; }
-    if (struck.indexOf(found.e) !== -1) continue;   // a target only counts once per shot
-    struck.push(found.e);
-    applyHit(found);
-    anyHit = true;
+    // An energy bolt keeps going down the line: it can strike the first few things
+    // it passes through, so one shot can take a man and the flag behind him.
+    const through = Math.min(w.pierce || 1, founds.length);
+    for (let j = 0; j < through; j++) {
+      const f = founds[j];
+      if (struck.indexOf(f.e) !== -1) continue;   // a target only counts once per shot
+      struck.push(f.e);
+      applyHit(f);
+      anyHit = true;
+      if (j > 0) addTracer(muzzle, { x: f.hit.x, y: f.hit.y }, false, w.bolt ? 'bolt' : null);
+    }
   }
 
   cross.x = aimX; cross.y = aimY;
@@ -2007,19 +2033,34 @@ function render() {
    Every gun is built horizontally in its own sub-frame that is tilted up-left
    by RIFLE_ANGLE / SHOTGUN_ANGLE, i.e. the barrel leaves the frame towards the
    crosshair. How the gun sits in the view comes from the weapon's own fields.
+   Right-click sighting in takes that pitch back out (see gunPitch), so an aimed
+   gun is drawn level instead of canted up-left.
    ========================================================================= */
-const RIFLE_ANGLE = 0.9;                       // barrel pitch inside the rifle sub-frame
-const SHOTGUN_ANGLE = 0.86;
-
 function gunScale() {
   return clamp(Math.min(W / 1280, H / 880), 0.55, 1.3);
 }
 
-// The barrel tip in the weapon's own sub-frame, scaled but unrotated: the aim pose
-// uses it to work out where to hold the gun for its muzzle to land on the aim point.
-function gunMuzzleOffset(w) {
+// How much of the art's own pitch is left. Hip pose: all of it. Sighted in, it is
+// taken back out, so the weapon ends up drawn level rather than canted up-left.
+function gunPitch(w) {
+  const left = w.sightLine ? 1 - aimBlend() : 1;
+  return (w.tilt || 0) * left;
+}
+
+// Where the barrel tip sits in the weapon's own sub-frame, scaled but unrotated.
+// Levelling the art swings the tip about the pivot the art was built around
+// (`pivot`; a mirrored hand turns the other way), so the aim pose asks for the
+// tip at level = 1 and holds the gun wherever that tip lands on the aim point.
+function gunMuzzleOffset(w, level, mirrored) {
   const s = gunScale();
-  return { x: w.muzzle.x * s, y: w.muzzle.y * s };
+  const home = mirrored && w.altMuzzle ? w.altMuzzle : w.muzzle;
+  const alt = mirrored && w.altPivot;
+  const pivot = (alt ? w.altPivot : w.pivot) || { x: 0, y: 0 };
+  const lv = w.sightLine ? clamp(level, 0, 1) : 0;
+  const turn = -(w.tilt || 0) * lv * (alt ? -1 : 1);
+  const dx = home.x - pivot.x, dy = home.y - pivot.y;
+  const cos = Math.cos(turn), sin = Math.sin(turn);
+  return { x: (pivot.x + dx * cos - dy * sin) * s, y: (pivot.y + dx * sin + dy * cos) * s };
 }
 
 function gunTransform() {
@@ -2030,11 +2071,11 @@ function gunTransform() {
   const progress = gun.reloading > 0 ? 1 - gun.reloading / w.reload : 0;
   const reloadDrop = gun.reloading > 0 ? Math.sin(progress * Math.PI) : 0;
   // hip position, then the sighted-in position the right mouse button blends to.
-  // Sighted in, a gun is held straight: square to the world (no cant) with its muzzle
-  // on the point the view is aimed at, so the barrel points where you are aiming.
+  // Sighted in, a gun is held straight: level (its own pitch taken out), square to
+  // the world, with its muzzle on the point the view is aimed at.
   let sx = w.sightX, sy = w.sightY, srot = w.sightRot;
   if (w.sightLine) {
-    const m = gunMuzzleOffset(w);                 // the barrel tip in the weapon's own frame
+    const m = gunMuzzleOffset(w, 1, false);       // ...the barrel tip once it is level
     sx = (W * AIM_REF.x - m.x) / W;
     sy = (H * AIM_REF.y + SIGHT_DROP - m.y) / H;
     srot = 0;
@@ -2057,12 +2098,10 @@ function gunTransform() {
 function gunMuzzle() {
   const w = currentGun();
   const t = gunTransform();
-  const s = gunScale();
   // a pair of pistols trades hands shot for shot
-  const home = (w.altMuzzle && game.shots % 2 === 1) ? w.altMuzzle : w.muzzle;
-  const lx = home.x * s, ly = home.y * s;
+  const off = gunMuzzleOffset(w, aimBlend(), !!(w.altMuzzle && game.shots % 2 === 1));
   const cos = Math.cos(t.rot), sin = Math.sin(t.rot);
-  return { x: t.x + lx * cos - ly * sin, y: t.y + lx * sin + ly * cos };
+  return { x: t.x + off.x * cos - off.y * sin, y: t.y + off.x * sin + off.y * cos };
 }
 
 function rrect(x, y, w, h, r) {
@@ -2078,61 +2117,95 @@ function rrect(x, y, w, h, r) {
 
 const SKIN_A = '#d9a97c', SKIN_B = '#c48d61', SKIN_C = '#eabf93';
 
+// The weapon's artwork carries the grip, and the arms are drawn in the view frame, so as
+// the sub-frame comes level the wrist has to travel with it - swung about the same pivot
+// the artwork turns about - or the sleeve and the hand on the grip would come apart.
+// Nothing moves at the hip; the whole cant is taken out when sighted in.
+function armWrist(w, px, py, x, y, mirrored) {
+  let a = gunPitch(w) - (w.tilt || 0);
+  if (mirrored) a = -a;
+  if (!a) return { x: x, y: y };
+  const s = Math.sin(a), c = Math.cos(a), dx = x - px, dy = y - py;
+  return { x: px + dx * c - dy * s, y: py + dx * s + dy * c };
+}
+
+// A crease laid along an arm: hold it in the arm's own frame (a way along it, a little to
+// one side) so it stays on the sleeve as the arm swings up to a levelled gun.
+function armAlong(sx, sy, wx, wy, hand, x, y) {
+  const ax = wx - sx, ay = wy - sy, aLen = Math.hypot(ax, ay);
+  const along = ((x - sx) * ax + (y - sy) * ay) / aLen;
+  const off = ((x - sx) * -ay + (y - sy) * ax) / aLen;
+  const bx = hand.x - sx, by = hand.y - sy, bLen = Math.hypot(bx, by);
+  const ux = bx / bLen, uy = by / bLen;
+  return { x: sx + ux * along - uy * off, y: sy + uy * along + ux * off };
+}
+
 function drawArms() {
+  const w = currentGun();
   ctx.lineCap = 'round';
   // trigger arm: from the bottom-right corner up to the pistol grip
   ctx.strokeStyle = '#5b6244';
   ctx.lineWidth = 96;
+  const grip = armWrist(w, 0, 0, -16, 60);
   ctx.beginPath();
   ctx.moveTo(340, 470);
-  ctx.lineTo(-16, 60);
+  ctx.lineTo(grip.x, grip.y);
   ctx.stroke();
 
   // support arm: crosses under the rifle to the handguard
   ctx.strokeStyle = '#4e5540';
   ctx.lineWidth = 88;
+  const guard = armWrist(w, 0, 0, -124, -112);
   ctx.beginPath();
   ctx.moveTo(250, 545);
-  ctx.lineTo(-124, -112);
+  ctx.lineTo(guard.x, guard.y);
   ctx.stroke();
 
   // crease highlight along the trigger arm
   ctx.strokeStyle = 'rgba(0,0,0,0.18)';
   ctx.lineWidth = 30;
+  const c1 = armAlong(340, 470, -16, 60, grip, 292, 396);
+  const c2 = armAlong(340, 470, -16, 60, grip, 36, 150);
   ctx.beginPath();
-  ctx.moveTo(292, 396);
-  ctx.lineTo(36, 150);
+  ctx.moveTo(c1.x, c1.y);
+  ctx.lineTo(c2.x, c2.y);
   ctx.stroke();
 }
 
 function drawArmsPistol() {
+  const w = currentGun();
   ctx.lineCap = 'round';
   ctx.strokeStyle = '#5b6244';
   ctx.lineWidth = 92;
+  const grip = armWrist(w, 0, 0, 84, -4);
   ctx.beginPath();
   ctx.moveTo(250, 350);
-  ctx.lineTo(84, -4);
+  ctx.lineTo(grip.x, grip.y);
   ctx.stroke();
 
   ctx.strokeStyle = '#4e5540';
   ctx.lineWidth = 84;
+  const brace = armWrist(w, 0, 0, -34, 30);
   ctx.beginPath();
   ctx.moveTo(-140, 380);
-  ctx.lineTo(-34, 30);
+  ctx.lineTo(brace.x, brace.y);
   ctx.stroke();
 
   ctx.strokeStyle = 'rgba(0,0,0,0.18)';
   ctx.lineWidth = 30;
+  const c1 = armAlong(250, 350, 84, -4, grip, 208, 268);
+  const c2 = armAlong(250, 350, 84, -4, grip, 112, 60);
   ctx.beginPath();
-  ctx.moveTo(208, 268);
-  ctx.lineTo(112, 60);
+  ctx.moveTo(c1.x, c1.y);
+  ctx.lineTo(c2.x, c2.y);
   ctx.stroke();
 }
 
 function drawAK47() {
+  const w = currentGun();
   drawArms();
   ctx.save();
-  ctx.rotate(RIFLE_ANGLE);
+  ctx.rotate(gunPitch(w));               // sighted in: the rifle comes up level
   drawRifleBody();
   drawRifleHands();
   ctx.restore();
@@ -2145,59 +2218,70 @@ function drawPistol() {
 }
 
 function drawShotgun() {
+  const w = currentGun();
   drawArms();
   ctx.save();
-  ctx.rotate(SHOTGUN_ANGLE);
+  ctx.rotate(gunPitch(w));               // sighted in: the gun comes up level
   drawShotgunBody();
   drawShotgunHands();
   ctx.restore();
 }
 
 function drawEnergyPistols() {
+  const w = currentGun();
   drawArmsEnergy();
+  const pitch = gunPitch(w);               // sighted in: both pistols come up level
   const lit = game.charged ? 1 : 0.34;     // unloaded, the coils only smoulder
   // right hand: barrel up and in toward the crosshair
   ctx.save();
   ctx.translate(-140, 30);
   ctx.scale(0.86, 0.86);
-  ctx.rotate(0.35);
+  ctx.rotate(pitch);
   drawEnergyBody(lit);
   ctx.restore();
   // left hand: mirrored
   ctx.save();
   ctx.translate(140, 30);
   ctx.scale(-0.86, 0.86);
-  ctx.rotate(0.35);
+  ctx.rotate(pitch);
   drawEnergyBody(lit);
   ctx.restore();
 }
 
 function drawArmsEnergy() {
+  const w = currentGun();
   ctx.lineCap = 'round';
-  // forearms in from both bottom corners, meeting at the grips
+  // forearms in from both bottom corners, meeting at the grips. Each hand rides its
+  // own pistol's pivot (see drawEnergyPistols), and the mirrored one turns the other way.
   ctx.strokeStyle = '#5b6244';
   ctx.lineWidth = 80;
+  const lGrip = armWrist(w, -140, 30, -70, -40);
   ctx.beginPath();
   ctx.moveTo(-250, 470);
-  ctx.lineTo(-70, -40);
+  ctx.lineTo(lGrip.x, lGrip.y);
   ctx.stroke();
 
   ctx.strokeStyle = '#4e5540';
   ctx.lineWidth = 80;
+  const rGrip = armWrist(w, 140, 30, 70, -40, true);
   ctx.beginPath();
   ctx.moveTo(250, 470);
-  ctx.lineTo(70, -40);
+  ctx.lineTo(rGrip.x, rGrip.y);
   ctx.stroke();
 
   ctx.strokeStyle = 'rgba(0,0,0,0.18)';
   ctx.lineWidth = 26;
+  const l1 = armAlong(-250, 470, -70, -40, lGrip, -196, 380);
+  const l2 = armAlong(-250, 470, -70, -40, lGrip, -88, 30);
   ctx.beginPath();
-  ctx.moveTo(-196, 380);
-  ctx.lineTo(-88, 30);
+  ctx.moveTo(l1.x, l1.y);
+  ctx.lineTo(l2.x, l2.y);
   ctx.stroke();
+  const r1 = armAlong(250, 470, 70, -40, rGrip, 196, 380);
+  const r2 = armAlong(250, 470, 70, -40, rGrip, 88, 30);
   ctx.beginPath();
-  ctx.moveTo(196, 380);
-  ctx.lineTo(88, 30);
+  ctx.moveTo(r1.x, r1.y);
+  ctx.lineTo(r2.x, r2.y);
   ctx.stroke();
 }
 
@@ -3239,11 +3323,19 @@ window.__range = {
   game: game, cam: cam, cross: cross, gun: gun,
   weapons: WEAPONS, currentGun: currentGun, selectWeapon: selectWeapon, cycleWeapon: cycleWeapon,
   get gunIndex() { return gunIndex; },
-  project: project, hitTest: hitTest, findHit: findHit, fire: fire,
+  project: project, hitTest: hitTest, findHit: findHit, findHits: findHits, fire: fire,
+  get weapon() {
+    const w = currentGun();
+    return { id: w.id, interval: w.interval, pierce: w.pierce || 1, recoil: w.recoil,
+             kick: w.kick, shake: w.shake, ammo: gun.ammo, mag: w.mag };
+  },
   startGame: startGame, nextLevel: nextLevel, spawnLevel: spawnLevel,
   startReload: startReload, completeLevel: completeLevel,
   drawGun: drawGun, gunTransform: gunTransform, gunScale: gunScale,
   gunMuzzleOffset: gunMuzzleOffset, sightDrop: SIGHT_DROP, aimRef: AIM_REF,
+  gunPitch: gunPitch, gunTilt: function () { return currentGun().tilt || 0; },
+  armWrist: armWrist,
+  aimBlend: aimBlend,
   get triggerHeld() { return triggerHeld; },
   focalLength: focalLength, gunMuzzle: gunMuzzle, targetFace: targetFace, flagShape: flagShape,
   entityPoint: function (e) {
