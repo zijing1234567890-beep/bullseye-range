@@ -359,9 +359,62 @@ const Sound = (function () {
     beep(1760, t + 0.3, 0.3, 0.2, 'triangle');
   }
 
+  function flame() {                      // the jet: a fat low roar that swells and dies
+    if (!ensure()) return;
+    const t = ac.currentTime;
+    const roar = noise(0.5);
+    const lp = ac.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(340, t);
+    lp.frequency.exponentialRampToValueAtTime(1500, t + 0.12);
+    lp.frequency.exponentialRampToValueAtTime(420, t + 0.46);
+    lp.Q.value = 1.4;
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.0008, t);
+    g.gain.exponentialRampToValueAtTime(0.34, t + 0.06);
+    g.gain.exponentialRampToValueAtTime(0.0008, t + 0.48);
+    roar.connect(lp); lp.connect(g); g.connect(master);
+    roar.start(t); roar.stop(t + 0.5);
+  }
+
+  function burn() {                       // something catching light: a crackling hiss
+    if (!ensure()) return;
+    const t = ac.currentTime;
+    const src = noise(0.34);
+    const bp = ac.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(2400, t);
+    bp.frequency.exponentialRampToValueAtTime(900, t + 0.3);
+    bp.Q.value = 0.9;
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.0008, t);
+    g.gain.exponentialRampToValueAtTime(0.2, t + 0.03);
+    g.gain.exponentialRampToValueAtTime(0.0008, t + 0.32);
+    src.connect(bp); bp.connect(g); g.connect(master);
+    src.start(t); src.stop(t + 0.34);
+    beep(190, t, 0.22, 0.16, 'sine');
+  }
+
+  function knife() {                      // a blade drawn back: a short metallic shink
+    if (!ensure()) return;
+    const t = ac.currentTime;
+    const src = noise(0.14);
+    const bp = ac.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(3200, t);
+    bp.frequency.exponentialRampToValueAtTime(1400, t + 0.12);
+    bp.Q.value = 3.2;
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.22, t);
+    g.gain.exponentialRampToValueAtTime(0.0008, t + 0.14);
+    src.connect(bp); bp.connect(g); g.connect(master);
+    src.start(t); src.stop(t + 0.15);
+    beep(1320, t + 0.02, 0.1, 0.06, 'triangle');
+  }
+
   return {
     ensure, shot, boom, pick, hit, flagHit, emptyClick, reloadMech, levelUp, gameStart,
-    enemyShot, deflect, slice, slash, hurt, heal, zap, pickup, load, crack
+    enemyShot, deflect, slice, slash, hurt, heal, zap, pickup, load, crack, flame, burn, knife
   };
 })();
 
@@ -519,6 +572,21 @@ const WEAPONS = [
     recoilRise: 0.05, reloadRise: 0.30, reloadTilt: 0.34,
     muzzle: { x: -249, y: -313 },              // = rotate(-400, -8) by SNIPER_ANGLE
     draw: drawSniper, sound: 'crack', ammo: 0
+  },
+  {
+    // Fuel, not rounds: the tank holds enough for a good long wash of fire, and
+    // whatever the jet touches catches light and burns down where it stands.
+    id: 'flame', name: 'Flamethrower', key: '7', code: 'Digit7',
+    flame: true, mag: 260, reload: 2.6, interval: 0.05,
+    pellets: 1, spread: 0,
+    recoil: 0.22, kick: 0.0009, shake: 0.22,
+    flashScale: 0.9, flashSpikes: 4,
+    anchorX: 0.62, anchorY: 0.95, baseRot: -0.32,
+    sightLine: true,                           // right-click squares the nozzle on the aim point
+    tilt: RIFLE_ANGLE,
+    recoilRise: 0.02, reloadRise: 0.30, reloadTilt: 0.32,
+    muzzle: { x: -219, y: -286 },              // = rotate(-360, -6) by RIFLE_ANGLE
+    draw: drawFlamethrower, sound: 'flame', ammo: 260
   }
 ];
 let gunIndex = 0;
@@ -545,6 +613,23 @@ const ROUND_DROP_CHANCE = 0.45;   // how often a shooter you drop leaves one beh
 const ROUND_SPEED = 8;            // a round drifts toward your hands this fast, then faster
 let roundChance = ROUND_DROP_CHANCE;   // the tests wind this up and down
 
+// The knife men: no gun, no cover, and no patience. They walk you down and cut
+// you at arm's length, so they are the reason to keep something burning.
+const KNIFE_SPEED = [2.3, 3.5];   // metres a second, closing on you
+const KNIFE_REACH = 1.75;         // ...and where they stop: a knife's length away
+const KNIFE_WINDUP = 0.44;        // seconds the blade is up before the cut lands
+const KNIFE_DAMAGE = [7, 13];     // health a cut takes off you
+const KNIFE_COOLDOWN = [1.0, 1.7];
+const KNIFE_MAX = 5;              // no more of them on the range at once than this
+
+// The flamethrower: fuel in a canister rather than rounds, and a jet that sets
+// whatever it washes over alight. A body burns for a moment before it drops.
+const FLAME_RANGE = 15;           // metres the jet carries
+const FLAME_TOL = 0.55;           // how far off the crosshair a body still catches
+const FLAME_BURN = 1.05;          // seconds a body burns before it goes down
+const FLAME_JET = 0.14;           // seconds the visible jet lingers after a squirt
+const FLAME_SCORCH = 60;          // points for burning something down
+
 const game = {
   state: 'menu',                 // menu | playing | paused | levelclear | down
   level: 1,
@@ -554,10 +639,13 @@ const game = {
   targetsNeeded: 0,
   flagsNeeded: 0,
   enemiesNeeded: 0,
+  knivesNeeded: 0,
   targetsDone: 0,
   flagsDone: 0,
   enemiesDone: 0,
+  knivesDone: 0,
   kills: 0,
+  burned: 0,                     // things burned down by the flamethrower
   deflects: 0,
   slices: 0,                     // rounds cut out of the air
   sliceT: 0,                     // seconds the current swing stays live
@@ -586,6 +674,8 @@ const game = {
 
 const gun = {
   recoil: 0, flash: 0, reloading: 0, aim: 0,   // aim: 0 hip -> 1 down the sights
+  flameT: 0,                    // seconds the last squirt of fire is still visible
+  flameSeed: -10,               // when the jet last roared, so it does not roar every squirt
   // the round count always belongs to the weapon in hand, so switching keeps it
   get ammo() { return WEAPONS[gunIndex].ammo; },
   set ammo(v) { WEAPONS[gunIndex].ammo = v; }
@@ -659,15 +749,18 @@ function spawnLevel(n) {
   const tn = 4 + n;
   const fn = 2 + Math.ceil(n / 2);
   const en = 1 + Math.ceil(n / 2);          // armed men on the range, also a quota
+  const kn = Math.min(KNIFE_MAX, 1 + Math.floor(n / 2));   // ...and the ones with knives
   game.targetsNeeded = tn;
   game.flagsNeeded = fn;
   game.enemiesNeeded = en;
+  game.knivesNeeded = kn;
   game.targetsDone = 0;
   game.flagsDone = 0;
   game.enemiesDone = 0;
+  game.knivesDone = 0;
   game.levelTime = 0;
 
-  const total = tn + 2 + fn + 1 + en;
+  const total = tn + 2 + fn + 1 + en + kn;
   const spread = Math.min(Math.PI * 1.24, Math.PI * 0.52 + n * 0.075);
   const minR = 13 + n * 0.7;
   const maxR = Math.min(58, minR + 22 + n * 1.4);
@@ -683,6 +776,7 @@ function spawnLevel(n) {
   for (let i = 0; i < tn + 2; i++) kinds.push('target');
   for (let i = 0; i < fn + 1; i++) kinds.push('flag');
   for (let i = 0; i < en; i++) kinds.push('enemy');
+  for (let i = 0; i < kn; i++) kinds.push('knife');
   for (let i = kinds.length - 1; i > 0; i--) {
     const j = randInt(0, i);
     const t = kinds[i]; kinds[i] = kinds[j]; kinds[j] = t;
@@ -702,6 +796,20 @@ function spawnLevel(n) {
         state: 'alive', t: 0, drop: 0, alpha: 1,
         swayAmp: rand(0.5, 1.5), swaySpeed: rand(0.45, 0.9), wob: rand(0, TAU),
         cool: rand(1.0, 2.4), aim: 0, flash: 0,
+        burn: 0, burnFrom: 0, ember: rand(0, TAU),
+        jacket: randInt(0, 3)
+      });
+      return;
+    }
+    if (kind === 'knife') {
+      // no pistol and no line to hold: he starts out on the range and walks at you
+      ents.push({
+        type: 'knife', x: x, z: z, hx: x, hz: z,
+        h: 1.74, r: 0.38,
+        state: 'alive', t: 0, drop: 0, alpha: 1,
+        speed: rand(KNIFE_SPEED[0], KNIFE_SPEED[1]),
+        stride: rand(0, TAU), swing: 0, cool: rand(0.5, 1.4),
+        burn: 0, burnFrom: 0, ember: rand(0, TAU),
         jacket: randInt(0, 3)
       });
       return;
@@ -715,14 +823,16 @@ function spawnLevel(n) {
         state: 'alive', t: 0, drop: 0, alpha: 1,
         swayAmp: moving ? rand(1.4, 2.8) : 0,
         swaySpeed: rand(0.7, 1.5),
-        wob: rand(0, TAU)
+        wob: rand(0, TAU),
+        burn: 0, burnFrom: 0, ember: rand(0, TAU)
       });
     } else {
       ents.push({
         type: 'flag', x: x, z: z, hx: x, hz: z,
         poleH: rand(3.5, 4.8), w: rand(1.35, 1.95), h: rand(0.85, 1.25),
         hue: (n * 47 + randInt(0, 30)) % 360,
-        state: 'alive', t: 0, lowered: 0, alpha: 1
+        state: 'alive', t: 0, lowered: 0, alpha: 1,
+        burn: 0, burnFrom: 0, ember: rand(0, TAU)
       });
     }
   });
@@ -742,6 +852,7 @@ function spawnLevel(n) {
   needHintAt = -10;
   needRoundHintAt = -10;
   gun.reloading = 0;
+  gun.flameT = 0;
   cam.yaw = 0;
   cam.pitch = 0;
   cross.x = W * 0.5;
@@ -782,7 +893,8 @@ function updateEntities(dt) {
       e.hx = e.x + (e.z / r) * off;
       e.hz = e.z - (e.x / r) * off;
     }
-    if (e.state === 'alive' && e.type === 'enemy') {
+    const ablaze = e.burn > 0;                       // alight: he stops fighting, and flails
+    if (e.state === 'alive' && e.type === 'enemy' && !ablaze) {
       if (e.flash > 0) e.flash = Math.max(0, e.flash - dt * 7);
       if (e.aim > 0) {                               // lining you up, then the shot
         e.aim += dt / ENEMY_AIM;
@@ -792,9 +904,48 @@ function updateEntities(dt) {
         if (e.cool <= 0) e.aim = 0.0001;
       }
     }
+    if (e.state === 'alive' && e.type === 'knife' && !ablaze) {
+      // He walks straight at you and stops a knife's length away, then cuts. No
+      // line to hold and nowhere to hide: the only answer is to put him down first.
+      const dx = cam.x - e.x, dz = cam.z - e.z;
+      const d = Math.hypot(dx, dz) || 0.001;
+      if (d > KNIFE_REACH) {
+        const step = Math.min(d - KNIFE_REACH, e.speed * dt);
+        e.x += (dx / d) * step;
+        e.z += (dz / d) * step;
+      }
+      e.hx = e.x; e.hz = e.z;
+      e.stride += dt * (3.4 + e.speed * 1.5);        // the walk cycle, for the art
+      if (e.swing > 0) {                             // the blade is up: the cut lands
+        e.swing += dt / KNIFE_WINDUP;
+        if (e.swing >= 1) {
+          e.swing = 0;
+          e.cool = rand(KNIFE_COOLDOWN[0], KNIFE_COOLDOWN[1]);
+          if (d <= KNIFE_REACH + 0.45 && game.state === 'playing') {
+            const p = project(e.hx, 1.05, e.hz);
+            if (guarding()) {                    // the raised katana turns the blade aside
+              burst(p ? p.x : W * 0.5, p ? p.y : H * 0.5, '#cfe3ff', 12, 230);
+              game.deflects++;
+              Sound.deflect();
+            } else {
+              hurt(randInt(KNIFE_DAMAGE[0], KNIFE_DAMAGE[1]), p ? p.x : W * 0.5);
+            }
+          }
+        }
+      } else {
+        e.cool -= dt;
+        if (e.cool <= 0 && d <= KNIFE_REACH + 0.45) { e.swing = 0.0001; Sound.knife(); }
+      }
+    }
+    if (e.state === 'alive' && e.burn > 0) {         // set alight by the flamethrower
+      e.burn += dt;
+      e.swing = 0; e.aim = 0;                        // fire puts the fight out of them
+      if (e.type === 'knife') e.stride += dt * 9;    // thrashing about
+      if (e.burn >= FLAME_BURN) scorch(e);
+    }
     if (e.state === 'dying') {
       e.t += dt;
-      if (e.type === 'enemy') {
+      if (e.type === 'enemy' || e.type === 'knife') {
         const d = Math.min(1, e.t / 1.25);
         e.drop = easeInQuad(d);
         e.alpha = d < 0.6 ? 1 : 1 - (d - 0.6) / 0.4;
@@ -1059,6 +1210,7 @@ function resolveBullet(b) {
    the round they fire as long as you hold the trigger.
    ========================================================================= */
 let needHintAt = -10;
+let lastBurnSoundAt = -10;      // keeps a whole crowd catching light from sizzling at once
 
 function energyRoll() {
   return Math.random() < dropChance;
@@ -1278,7 +1430,7 @@ function hitTest(e) {
     if (Math.hypot(cross.x - f.x, cross.y - f.y) > f.radius * 1.04) return null;
     return { x: cross.x, y: cross.y, depth: f.depth };
   }
-  if (e.type === 'enemy') {
+  if (e.type === 'enemy' || e.type === 'knife') {
     const f = enemyFace(e);
     if (!f) return null;
     if (cross.x < f.x - f.halfW || cross.x > f.x + f.halfW) return null;
@@ -1317,6 +1469,90 @@ function findHit() {
   return hits.length ? hits[0] : null;
 }
 
+/* ---------------- the flamethrower's jet ---------------- */
+// Where an entity sits on screen and how big it reads, in one place: the jet needs
+// it to decide what it washes over, and the burning overlay needs it to draw.
+function entityAnchor(e) {
+  if (e.type === 'target') {
+    const f = targetFace(e);
+    return f ? { x: f.x, y: f.y, k: f.k, rad: f.radius } : null;
+  }
+  if (e.type === 'enemy' || e.type === 'knife') {
+    const f = enemyFace(e);
+    return f ? { x: f.x, y: (f.top + f.bot) * 0.5, k: f.k, rad: Math.max(f.halfW, (f.bot - f.top) * 0.5) } : null;
+  }
+  if (e.type === 'flag') {
+    const s = flagShape(e);
+    return s ? { x: s.pTop.x + s.w * 0.45, y: s.pTop.y + s.h * 0.5, k: s.k, rad: Math.max(s.w * 0.5, s.h * 0.5) } : null;
+  }
+  const p = project(e.x, e.y === undefined ? 1.1 : e.y, e.z);
+  return p ? { x: p.x, y: p.y, k: p.k, rad: Math.max(8, p.k * 0.2) } : null;
+}
+
+// How far the crosshair sits from a body on screen: 0 when it is on it. Measured
+// to the body's box, not its centre, so a wide flag still catches the jet.
+function flameDistance(e) {
+  if (e.type === 'enemy' || e.type === 'knife') {
+    const f = enemyFace(e);
+    if (!f) return Infinity;
+    const dx = Math.max(0, Math.abs(cross.x - f.x) - f.halfW * 1.25);
+    const dy = Math.max(0, Math.abs(cross.y - (f.top + f.bot) * 0.5) - (f.bot - f.top) * 0.62);
+    return Math.hypot(dx, dy);
+  }
+  const a = entityAnchor(e);
+  if (!a) return Infinity;
+  return Math.max(0, Math.hypot(cross.x - a.x, cross.y - a.y) - a.rad);
+}
+
+// Everything in front of the nozzle, inside the jet's reach, close enough to the
+// crosshair to catch: nearest first, so the near man takes the fire.
+function flameTargets() {
+  const found = [];
+  for (let i = 0; i < game.entities.length; i++) {
+    const e = game.entities[i];
+    if (e.state !== 'alive') continue;
+    if (e.type === 'energy' || e.type === 'round') continue;
+    const x = e.type === 'flag' ? e.x : e.hx, z = e.type === 'flag' ? e.z : e.hz;
+    const d = depthOf(x, z);
+    if (!(d > 0.3) || d > FLAME_RANGE) continue;
+    const a = entityAnchor(e);
+    if (!a) continue;
+    if (flameDistance(e) > FLAME_TOL * a.k) continue;   // the cone widens with distance
+    found.push({ e: e, d: d, a: a });
+  }
+  found.sort(function (p, q) { return p.d - q.d; });
+  return found;
+}
+
+// A body the jet has touched: it is alight now, and burns down where it stands.
+function ignite(e) {
+  if (e.state !== 'alive' || e.burn > 0) return false;
+  e.burn = 0.0001;
+  e.burnFrom = game.time;
+  if (game.time - lastBurnSoundAt > 0.25) { lastBurnSoundAt = game.time; Sound.burn(); }
+  return true;
+}
+
+// The fire, not a bullet, is what put it down.
+function scorch(e) {
+  const a = entityAnchor(e);
+  const sx = a ? a.x : cross.x, sy = a ? a.y : cross.y;
+  burst(sx, sy, '#ffb03a', 26, 340);
+  burst(sx, sy, '#ffe9a8', 14, 210);
+  const x = e.type === 'flag' ? e.x : e.hx, z = e.type === 'flag' ? e.z : e.hz;
+  applyHit({ e: e, hit: { x: sx, y: sy, depth: depthOf(x, z), head: false }, flame: true });
+}
+
+// One squirt of the jet: light up whatever it reaches, and leave embers where it lands.
+function sprayFlame() {
+  const caught = flameTargets();
+  let fresh = 0;
+  for (let i = 0; i < caught.length; i++) if (ignite(caught[i].e)) fresh++;
+  burst(cross.x, cross.y, '#ffb03a', 3, 190);
+  if (!caught.length) burst(cross.x, cross.y, '#c8ccd4', 1, 120);
+  return fresh;
+}
+
 /* ---------------- effects ---------------- */
 function burst(x, y, color, n, spread) {
   for (let i = 0; i < n; i++) {
@@ -1348,17 +1584,18 @@ function applyHit(found) {
   e.state = 'dying';
   e.t = 0;
 
-  if (e.type === 'enemy') {                // a man, not a target: he stays down for good
-    game.enemiesDone++;
+  if (e.type === 'enemy' || e.type === 'knife') {   // a man, not a target: he stays down for good
+    if (e.type === 'enemy') game.enemiesDone++; else game.knivesDone++;
     game.kills++;
     const head = !!found.hit.head;
-    const pts = head ? 250 : 150;
+    const pts = (head ? 250 : 150) + (found.flame ? FLAME_SCORCH : 0);
+    if (found.flame) game.burned++;
     game.score += pts;
     game.pops.push({
       x: e.hx, y: 1.15, z: e.hz,
-      text: head ? 'HEADSHOT +' + pts : '+' + pts,
+      text: found.flame ? 'BURNED +' + pts : (head ? 'HEADSHOT +' + pts : '+' + pts),
       life: 1.0, max: 1.0,
-      color: head ? '#ffd166' : '#ffb0a2'
+      color: found.flame ? '#ffb03a' : (head ? '#ffd166' : '#ffb0a2')
     });
     burst(found.hit.x, found.hit.y, '#e0564a', 22);
     Sound.hit();
@@ -1372,7 +1609,8 @@ function applyHit(found) {
 
   const base = e.type === 'target' ? 100 : 60;
   const distBonus = Math.round(clamp(36 - found.hit.depth * 0.7, 0, 36));
-  const pts = base + distBonus;
+  const pts = base + distBonus + (found.flame ? FLAME_SCORCH : 0);
+  if (found.flame) game.burned++;
   game.score += pts;
 
   if (e.type === 'target') game.targetsDone++; else game.flagsDone++;
@@ -1399,7 +1637,8 @@ function applyHit(found) {
 function maybeComplete() {
   if (game.targetsDone >= game.targetsNeeded &&
       game.flagsDone >= game.flagsNeeded &&
-      game.enemiesDone >= game.enemiesNeeded) completeLevel();
+      game.enemiesDone >= game.enemiesNeeded &&
+      game.knivesDone >= game.knivesNeeded) completeLevel();
 }
 
 /* ---------------- the katana ---------------- */
@@ -1419,7 +1658,7 @@ function slash() {
   let best = null, bestDepth = Infinity;
   for (let i = 0; i < game.entities.length; i++) {
     const e = game.entities[i];
-    if (e.state !== 'alive' || e.type !== 'enemy') continue;
+    if (e.state !== 'alive' || (e.type !== 'enemy' && e.type !== 'knife')) continue;
     const d = depthOf(e.hx, e.hz);
     if (d <= 0.4 || d > w.reach) continue;
     const p = project(e.hx, 1.0, e.hz);
@@ -1482,6 +1721,15 @@ function fire() {
   cam.pitch += w.kick * (1 - aimBlend() * 0.35);   // braced against the shoulder: less climb
   cam.shake = w.shake;
   game.shots++;
+
+  if (w.flame) {                           // fuel, not rounds: one squirt of the jet
+    gun.flash = 0;                         // no muzzle star: the jet draws its own root
+    gun.flameT = FLAME_JET;                // ...and the flame lingers between squirts
+    if (game.time - gun.flameSeed > 0.3) { gun.flameSeed = game.time; Sound.flame(); }
+    if (sprayFlame()) game.hits++;
+    updateHud();
+    return;
+  }
 
   const muzzle = gunMuzzle();
   const aimX = cross.x, aimY = cross.y;    // hitTest() reads the global crosshair
@@ -1988,6 +2236,182 @@ function drawEnemy(e) {
   ctx.globalAlpha = 1;
 }
 
+// The men with knives: same build as a shooter, but no pistol and no patience.
+// The walk cycle swings the legs, and the blade comes up over the shoulder a beat
+// before it lands -- that raised arm is the only warning you get.
+function drawKnife(e) {
+  const f = enemyFace(e);
+  if (!f) return;
+  const k = f.k;
+  const c = JACKETS[(e.jacket + 1) % JACKETS.length];
+  const step = Math.sin(e.stride);
+  const swing = clamp(e.swing, 0, 1);
+  const live = e.state === 'alive';
+
+  ctx.save();
+  ctx.globalAlpha = e.alpha;
+  ctx.translate(f.x, f.bot);
+  if (e.drop > 0) ctx.rotate(e.drop * 1.15);
+
+  // shadow
+  ctx.fillStyle = 'rgba(40, 34, 26, 0.42)';
+  ctx.beginPath();
+  ctx.ellipse(0, 0, k * 0.42, k * 0.11, 0, 0, TAU);
+  ctx.fill();
+
+  // legs, striding
+  ctx.fillStyle = '#272e37';
+  ctx.save();
+  ctx.translate(-0.13 * k, -0.92 * k);
+  ctx.rotate(step * (live ? 0.3 : 0));
+  rrect(-0.1 * k, 0, 0.2 * k, 0.9 * k, 0.06 * k); ctx.fill();
+  ctx.fillStyle = '#171b21';
+  rrect(-0.13 * k, 0.83 * k, 0.26 * k, 0.07 * k, 0.03 * k); ctx.fill();
+  ctx.restore();
+  ctx.fillStyle = '#272e37';
+  ctx.save();
+  ctx.translate(0.13 * k, -0.92 * k);
+  ctx.rotate(-step * (live ? 0.3 : 0));
+  rrect(-0.1 * k, 0, 0.2 * k, 0.9 * k, 0.06 * k); ctx.fill();
+  ctx.fillStyle = '#171b21';
+  rrect(-0.13 * k, 0.83 * k, 0.26 * k, 0.07 * k, 0.03 * k); ctx.fill();
+  ctx.restore();
+
+  // torso, leaning in as he closes
+  ctx.fillStyle = c.coat;
+  rrect(-0.28 * k, -1.62 * k, 0.56 * k, 0.74 * k, 0.11 * k); ctx.fill();
+  ctx.fillStyle = c.trim;
+  rrect(-0.28 * k, -1.09 * k, 0.56 * k, 0.09 * k, 0.04 * k); ctx.fill();
+  // a strap across the chest, so he does not read as the shooter
+  ctx.strokeStyle = 'rgba(20,22,26,0.55)';
+  ctx.lineWidth = Math.max(1.5, k * 0.05);
+  ctx.beginPath();
+  ctx.moveTo(-0.24 * k, -1.55 * k);
+  ctx.lineTo(0.22 * k, -1.02 * k);
+  ctx.stroke();
+
+  // head, hood up
+  ctx.fillStyle = SKIN_B;
+  ctx.beginPath();
+  ctx.arc(0, -1.73 * k, 0.135 * k, 0, TAU);
+  ctx.fill();
+  ctx.fillStyle = c.hat;
+  ctx.beginPath();
+  ctx.arc(0, -1.75 * k, 0.16 * k, Math.PI * 0.92, Math.PI * 2.08);
+  ctx.fill();
+  rrect(-0.17 * k, -1.8 * k, 0.34 * k, 0.1 * k, 0.04 * k);
+  ctx.fill();
+
+  // the knife arm: carried low, then whipped up and across
+  const lift = live ? swing * swing : 0;
+  const hx = k * lerp(0.3, 0.14, lift);
+  const hy = -k * lerp(1.02, 1.66, lift);
+  ctx.strokeStyle = c.coat;
+  ctx.lineWidth = Math.max(1.5, k * 0.1);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(0.2 * k, -1.5 * k);
+  ctx.quadraticCurveTo(0.34 * k, hy * 0.62, hx, hy);
+  ctx.stroke();
+
+  // hand and blade, the point angled at you
+  ctx.fillStyle = SKIN_B;
+  ctx.beginPath();
+  ctx.arc(hx, hy, Math.max(1.5, k * 0.075), 0, TAU);
+  ctx.fill();
+
+  const bladeLen = k * 0.46;
+  const ang = lerp(-0.55, -1.75, lift) + (live ? Math.sin(game.time * 2.4) * 0.04 : 0);
+  const bx = hx + Math.cos(ang) * 0.06 * k, by = hy + Math.sin(ang) * 0.06 * k;
+  const tipX = hx + Math.cos(ang) * bladeLen, tipY = hy + Math.sin(ang) * bladeLen;
+  const glint = 0.6 + 0.4 * Math.sin(game.time * 8 + e.stride);
+
+  ctx.strokeStyle = '#0c0e12';
+  ctx.lineWidth = Math.max(2.5, k * 0.075);
+  ctx.beginPath();
+  ctx.moveTo(bx, by);
+  ctx.lineTo(tipX, tipY);
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(226,238,248,' + (0.55 + glint * 0.35).toFixed(2) + ')';
+  ctx.lineWidth = Math.max(1, k * 0.028);
+  ctx.beginPath();
+  ctx.moveTo(bx, by);
+  ctx.lineTo(tipX, tipY);
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+  ctx.lineWidth = Math.max(0.8, k * 0.014);
+  ctx.beginPath();
+  ctx.moveTo(hx + Math.cos(ang) * 0.1 * k, hy + Math.sin(ang) * 0.1 * k);
+  ctx.lineTo(tipX - Math.cos(ang) * 0.08 * k, tipY - Math.sin(ang) * 0.08 * k);
+  ctx.stroke();
+
+  // the cut, if he is mid-swing: a thin arc off the blade
+  if (live && swing > 0.55) {
+    ctx.save();
+    ctx.globalAlpha = e.alpha * (1 - (swing - 0.55) / 0.45) * 0.8;
+    ctx.strokeStyle = '#eaf4ff';
+    ctx.lineWidth = Math.max(1.4, k * 0.03);
+    ctx.beginPath();
+    ctx.arc(hx, hy, bladeLen * 0.95, ang - 1.1, ang + 0.35);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
+// Whatever the jet has set alight: tongues of fire licking up the body, and a
+// little smoke above it. Drawn after the entity itself so it reads as on top.
+function drawBurn(e) {
+  if (!(e.burn > 0)) return;
+  const a = entityAnchor(e);
+  if (!a) return;
+  const alive = e.state === 'alive';
+  const f = alive ? clamp(e.burn / FLAME_BURN, 0, 1) : 1;
+  const k = a.k;
+  const baseY = a.y + a.rad * (e.type === 'flag' ? 0.2 : 0.55);
+  const tall = k * (0.42 + 0.3 * f);
+
+  ctx.save();
+  ctx.globalAlpha = e.alpha;
+  ctx.globalCompositeOperation = 'lighter';
+  const grad = ctx.createLinearGradient(0, baseY, 0, baseY - tall);
+  grad.addColorStop(0, 'rgba(255,214,120,0.95)');
+  grad.addColorStop(0.45, 'rgba(255,132,44,0.75)');
+  grad.addColorStop(1, 'rgba(214,52,18,0)');
+
+  for (let i = 0; i < 5; i++) {
+    const off = (i - 2) * k * 0.1 + Math.sin(game.time * 9 + e.ember + i) * k * 0.035;
+    const h = tall * (0.62 + 0.38 * Math.sin(game.time * 11 + e.ember + i * 1.7));
+    const w = k * (0.07 + 0.03 * (i % 2));
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(a.x + off - w, baseY);
+    ctx.quadraticCurveTo(a.x + off - w * 0.6, baseY - h * 0.6, a.x + off + Math.sin(game.time * 7 + i) * w, baseY - h);
+    ctx.quadraticCurveTo(a.x + off + w * 0.7, baseY - h * 0.5, a.x + off + w, baseY);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // the body itself glows through the fire
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = 'rgba(255,120,40,' + (0.08 + 0.12 * f).toFixed(3) + ')';
+  ctx.beginPath();
+  ctx.ellipse(a.x, a.y, a.rad * 0.9, a.rad * 1.1, 0, 0, TAU);
+  ctx.fill();
+
+  if (alive) {
+    ctx.globalAlpha = e.alpha * 0.22;
+    ctx.fillStyle = '#3b3330';
+    ctx.beginPath();
+    ctx.ellipse(a.x + Math.sin(game.time * 1.3 + e.ember) * k * 0.08, baseY - tall * 1.1,
+      a.rad * 0.6, a.rad * 0.5, 0, 0, TAU);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
 function drawEnergyCell(e) {
   const p = project(e.x, e.y, e.z);
   if (!p || !isFinite(p.x) || !isFinite(p.y) || !isFinite(p.k)) return;
@@ -2088,9 +2512,11 @@ function drawEntities() {
     const e = list[i].e;
     if (e.type === 'target') drawTarget(e);
     else if (e.type === 'enemy') drawEnemy(e);
+    else if (e.type === 'knife') drawKnife(e);
     else if (e.type === 'energy') drawEnergyCell(e);
     else if (e.type === 'round') drawRound(e);
     else drawFlag(e);
+    drawBurn(e);
   }
 }
 
@@ -2242,6 +2668,7 @@ function render() {
   ctx.restore();
 
   drawGun();
+  drawFlameJet();               // the jet leaves the nozzle toward the crosshair
   drawCrosshair();
   drawScope();                  // a scoped rifle closes the view down to a sight picture
   drawVignette();
@@ -3373,6 +3800,304 @@ function drawShotgunHands() {
    Same local space as the guns: +y down, the wrists at the lower right. The
    blade is drawn along +x and the group is turned up-left, so the edge sweeps
    the upper left of the frame. The right mouse button brings it to the guard. */
+/* The flamethrower: a fuel tank slung under the receiver, a hose running forward
+   to a fat heat-shielded tube, and a flared bell mouth with a pilot flame on it. */
+function drawFlamethrower() {
+  const w = currentGun();
+  drawArms();
+  ctx.save();
+  ctx.rotate(gunPitch(w));               // sighted in: the nozzle comes up level
+  drawFlamethrowerBody();
+  drawFlamethrowerHands();
+  ctx.restore();
+  drawPilotFlame();
+}
+
+function drawFlamethrowerBody() {
+  ctx.lineCap = 'butt';
+  ctx.lineJoin = 'miter';
+
+  // ---- hose, from the tank forward to the nozzle (behind everything else) ----
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = '#1d1915';
+  ctx.lineWidth = 26;
+  ctx.beginPath();
+  ctx.moveTo(96, 126);
+  ctx.bezierCurveTo(-30, 196, -248, 104, -330, 34);
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+  ctx.lineWidth = 6;
+  ctx.beginPath();
+  ctx.moveTo(96, 118);
+  ctx.bezierCurveTo(-30, 188, -248, 96, -330, 26);
+  ctx.stroke();
+  ctx.lineCap = 'butt';
+
+  // ---- fuel tank, slung under the receiver and running off the bottom ----
+  ctx.save();
+  ctx.translate(66, 30);
+  ctx.rotate(0.32);
+  const tank = ctx.createLinearGradient(-48, 0, 48, 0);
+  tank.addColorStop(0, '#59614a');
+  tank.addColorStop(0.42, '#7e8760');
+  tank.addColorStop(1, '#2f3526');
+  rrect(-48, -6, 96, 198, 44);
+  ctx.fillStyle = tank;
+  ctx.fill();
+  ctx.fillStyle = '#242a1d';
+  rrect(-30, -22, 60, 28, 10); ctx.fill();          // valve collar
+  rrect(-42, 92, 84, 14, 6); ctx.fill();            // straps
+  rrect(-42, 140, 84, 14, 6); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.1)';
+  rrect(-34, 20, 14, 150, 7); ctx.fill();           // a highlight down the tank
+  ctx.restore();
+
+  // ---- the tube: fat, ribbed, with a heat shield ----
+  const steel = ctx.createLinearGradient(0, -44, 0, 36);
+  steel.addColorStop(0, '#6e7783');
+  steel.addColorStop(0.4, '#3a424c');
+  steel.addColorStop(1, '#181c22');
+  rrect(-392, -36, 300, 64, 28);
+  ctx.fillStyle = steel;
+  ctx.fill();
+
+  ctx.strokeStyle = 'rgba(0,0,0,0.34)';
+  ctx.lineWidth = 5;
+  for (let i = 0; i < 5; i++) {
+    ctx.beginPath();
+    ctx.moveTo(-338 + i * 44, -34);
+    ctx.lineTo(-346 + i * 44, 26);
+    ctx.stroke();
+  }
+  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+  ctx.lineWidth = 6;
+  ctx.beginPath();
+  ctx.moveTo(-380, -28);
+  ctx.lineTo(-100, -28);
+  ctx.stroke();
+
+  // ---- flared bell mouth, and its dark throat ----
+  ctx.fillStyle = '#2b323a';
+  ctx.beginPath();
+  ctx.moveTo(-386, -36);
+  ctx.quadraticCurveTo(-416, -44, -430, -66);
+  ctx.lineTo(-430, 54);
+  ctx.quadraticCurveTo(-416, 34, -386, 26);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = '#0a0c10';
+  ctx.beginPath();
+  ctx.ellipse(-424, -6, 16, 58, 0.06, 0, TAU);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(190,205,220,0.35)';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.ellipse(-424, -6, 16, 58, 0.06, 0, TAU);
+  ctx.stroke();
+
+  // ---- receiver, gauge and pistol grip ----
+  const body = ctx.createLinearGradient(0, -66, 0, 34);
+  body.addColorStop(0, '#4f5964');
+  body.addColorStop(0.42, '#333b43');
+  body.addColorStop(1, '#1b1f24');
+  rrect(-96, -32, 186, 66, 10);
+  ctx.fillStyle = body;
+  ctx.fill();
+  rrect(-90, -48, 168, 20, 6);
+  ctx.fillStyle = '#3c454f';
+  ctx.fill();
+  rrect(-30, -24, 54, 18, 5);
+  ctx.fillStyle = '#101318';
+  ctx.fill();
+
+  // pressure gauge on the receiver's shoulder
+  ctx.beginPath();
+  ctx.arc(-46, -66, 26, 0, TAU);
+  ctx.fillStyle = '#20262c';
+  ctx.fill();
+  const face = ctx.createRadialGradient(-50, -72, 3, -46, -66, 24);
+  face.addColorStop(0, '#f4efe0');
+  face.addColorStop(1, '#c3bda9');
+  ctx.beginPath();
+  ctx.arc(-46, -66, 19, 0, TAU);
+  ctx.fillStyle = face;
+  ctx.fill();
+  const na = -2.2 + (gun.flameT > 0 ? 0.5 : 0.05);
+  ctx.strokeStyle = '#c2381f';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(-46, -66);
+  ctx.lineTo(-46 + Math.cos(na) * 15, -66 + Math.sin(na) * 15);
+  ctx.stroke();
+  ctx.strokeStyle = '#2a2f35';
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.arc(-46, -66, 19, 0, TAU);
+  ctx.stroke();
+
+  // the grip and its trigger
+  ctx.save();
+  ctx.translate(-6, 26);
+  ctx.rotate(0.24);
+  const grip = ctx.createLinearGradient(-26, 0, 28, 124);
+  grip.addColorStop(0, '#33383a');
+  grip.addColorStop(1, '#15181a');
+  rrect(-26, 0, 52, 124, 16);
+  ctx.fillStyle = grip;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+  ctx.lineWidth = 2.5;
+  for (let i = 0; i < 4; i++) {
+    ctx.beginPath();
+    ctx.moveTo(-19, 24 + i * 25);
+    ctx.lineTo(19, 30 + i * 25);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  ctx.strokeStyle = '#242a31';
+  ctx.lineWidth = 11;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(-62, 30);
+  ctx.quadraticCurveTo(-68, 78, -20, 78);
+  ctx.quadraticCurveTo(12, 78, 18, 42);
+  ctx.stroke();
+  rrect(-34, 28, 13, 36, 5);
+  ctx.fillStyle = '#4d5763';
+  ctx.fill();
+  ctx.lineCap = 'butt';
+}
+
+function drawFlamethrowerHands() {
+  // a gloved trigger hand, and a gloved hand under the tube
+  ctx.fillStyle = '#3f3628';
+  ctx.save();
+  ctx.translate(-10, 44);
+  ctx.rotate(0.16);
+  rrect(-30, -16, 62, 56, 18); ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+  ctx.lineWidth = 3;
+  for (let i = 0; i < 3; i++) {
+    ctx.beginPath();
+    ctx.moveTo(18, -6 + i * 15);
+    ctx.lineTo(30, -2 + i * 15);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  ctx.fillStyle = '#463c2c';
+  ctx.save();
+  ctx.translate(-150, 6);
+  ctx.rotate(-0.1);
+  rrect(-34, -8, 70, 54, 18); ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.28)';
+  ctx.lineWidth = 3;
+  for (let i = 0; i < 3; i++) {
+    ctx.beginPath();
+    ctx.moveTo(-26, 12 + i * 12);
+    ctx.lineTo(-6, 14 + i * 12);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// The little blue pilot jet burning at the bell mouth: it is what tells you the
+// thing is loaded even when you are not spraying.
+function drawPilotFlame() {
+  const t = game.time;
+  const flick = 1 + Math.sin(t * 17) * 0.16 + Math.sin(t * 29) * 0.08;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.fillStyle = 'rgba(120,190,255,0.55)';
+  ctx.beginPath();
+  ctx.ellipse(-430, -6, 7 * flick, 11 * flick, 0.06, 0, TAU);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(255,232,170,0.85)';
+  ctx.beginPath();
+  ctx.ellipse(-430, -6, 3.2 * flick, 5.5 * flick, 0.06, 0, TAU);
+  ctx.fill();
+  ctx.restore();
+}
+
+// The jet itself, from the nozzle to wherever you are pointing. Drawn in screen
+// space on top of the gun, so it reads as leaving the bell mouth toward the target.
+function drawFlameJet() {
+  if (gun.flameT <= 0.001) return;
+  const w = currentGun();
+  if (!w.flame) return;
+  const m = gunMuzzle();
+  const a = clamp(gun.flameT / FLAME_JET, 0, 1);
+  const t = game.time;
+  const tx = cross.x, ty = cross.y;
+  const dx = tx - m.x, dy = ty - m.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len, uy = dy / len;
+  const px = -uy, py = ux;                       // straight across the jet
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+
+  // three nested tongues: a wide dim sheath, a hot middle, and a white-hot core
+  const layers = [
+    { w0: 30, w1: 74, color: 'rgba(226,72,26,0.30)' },
+    { w0: 17, w1: 44, color: 'rgba(255,138,34,0.42)' },
+    { w0: 8, w1: 20, color: 'rgba(255,226,150,0.50)' }
+  ];
+  for (let i = 0; i < layers.length; i++) {
+    const L = layers[i];
+    const wob = Math.sin(t * 13 + i) * 0.06;
+    ctx.fillStyle = L.color;
+    ctx.beginPath();
+    ctx.moveTo(m.x + px * L.w0 * 0.6, m.y + py * L.w0 * 0.6);
+    ctx.quadraticCurveTo(
+      m.x + ux * len * 0.5 + px * L.w1 * (0.5 + wob),
+      m.y + uy * len * 0.5 + py * L.w1 * (0.5 + wob),
+      tx, ty
+    );
+    ctx.quadraticCurveTo(
+      m.x + ux * len * 0.5 - px * L.w1 * (0.5 - wob),
+      m.y + uy * len * 0.5 - py * L.w1 * (0.5 - wob),
+      m.x - px * L.w0 * 0.6, m.y - py * L.w0 * 0.6
+    );
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // puffs rolling along the jet
+  for (let i = 0; i < 9; i++) {
+    const q = (t * 1.7 + i * 0.11) % 1;
+    const along = len * (0.08 + q * 0.92);
+    const spread = (10 + q * 56) * (0.6 + 0.4 * Math.sin(t * 9 + i * 2.1));
+    const ox = px * spread * (i % 2 ? 1 : -1) * 0.7 + px * Math.sin(t * 6 + i) * 8;
+    ctx.fillStyle = i % 3 === 0 ? 'rgba(255,186,80,0.24)' : 'rgba(232,96,32,0.20)';
+    ctx.beginPath();
+    ctx.arc(m.x + ux * along + ox, m.y + uy * along + py * ox * 0.2, 10 + q * 26, 0, TAU);
+    ctx.fill();
+  }
+
+  // where it lands
+  const r = 26 + Math.sin(t * 21) * 5;
+  const glow = ctx.createRadialGradient(tx, ty, 1, tx, ty, r * 1.9);
+  glow.addColorStop(0, 'rgba(255,242,200,' + (0.55 * a).toFixed(3) + ')');
+  glow.addColorStop(0.5, 'rgba(255,140,40,' + (0.30 * a).toFixed(3) + ')');
+  glow.addColorStop(1, 'rgba(220,60,20,0)');
+  ctx.fillStyle = glow;
+  ctx.beginPath();
+  ctx.arc(tx, ty, r * 1.9, 0, TAU);
+  ctx.fill();
+
+  // the root, right at the pilot light
+  const root = ctx.createRadialGradient(m.x, m.y, 2, m.x, m.y, 46);
+  root.addColorStop(0, 'rgba(255,246,214,' + (0.7 * a).toFixed(3) + ')');
+  root.addColorStop(1, 'rgba(255,120,30,0)');
+  ctx.fillStyle = root;
+  ctx.beginPath();
+  ctx.arc(m.x, m.y, 46, 0, TAU);
+  ctx.fill();
+  ctx.restore();
+}
+
 function drawKatanaArms(hx, hy) {
   ctx.lineCap = 'round';
   ctx.strokeStyle = '#5b6244';
@@ -3530,9 +4255,11 @@ const els = {
   targetProg: document.getElementById('targetProg'),
   flagProg: document.getElementById('flagProg'),
   enemyProg: document.getElementById('enemyProg'),
+  knifeProg: document.getElementById('knifeProg'),
   targetBar: document.getElementById('targetBar'),
   flagBar: document.getElementById('flagBar'),
   enemyBar: document.getElementById('enemyBar'),
+  knifeBar: document.getElementById('knifeBar'),
   score: document.getElementById('score'),
   acc: document.getElementById('acc'),
   slices: document.getElementById('sliceStat'),
@@ -3567,6 +4294,7 @@ function updateHud() {
   setText(els.targetProg, game.targetsDone + ' / ' + game.targetsNeeded);
   setText(els.flagProg, game.flagsDone + ' / ' + game.flagsNeeded);
   setText(els.enemyProg, game.enemiesDone + ' / ' + game.enemiesNeeded);
+  setText(els.knifeProg, game.knivesDone + ' / ' + game.knivesNeeded);
   setText(els.score, fmt(game.score));
   setText(els.acc, game.shots ? Math.round(accuracy() * 100) + '%' : '—');
   setText(els.slices, String(game.slices));
@@ -3585,6 +4313,7 @@ function updateHud() {
   if (els.targetBar) els.targetBar.style.width = (game.targetsNeeded ? clamp(game.targetsDone / game.targetsNeeded, 0, 1) * 100 : 0) + '%';
   if (els.flagBar) els.flagBar.style.width = (game.flagsNeeded ? clamp(game.flagsDone / game.flagsNeeded, 0, 1) * 100 : 0) + '%';
   if (els.enemyBar) els.enemyBar.style.width = (game.enemiesNeeded ? clamp(game.enemiesDone / game.enemiesNeeded, 0, 1) * 100 : 0) + '%';
+  if (els.knifeBar) els.knifeBar.style.width = (game.knivesNeeded ? clamp(game.knivesDone / game.knivesNeeded, 0, 1) * 100 : 0) + '%';
   if (els.ammoBox) {
     els.ammoBox.classList.toggle('energy', w.energy === true);
     els.ammoBox.classList.toggle('sniper', w.sniper === true);
@@ -3780,6 +4509,7 @@ function step(dt) {
     if (game.state === 'playing' && (triggerHeld || keys['Space'])) fire();   // full-auto while held
     gun.recoil = Math.max(0, gun.recoil - dt * 4.2);
     gun.flash = Math.max(0, gun.flash - dt * 9);
+    gun.flameT = Math.max(0, gun.flameT - dt);      // the jet fades once you let go
     game.sliceT = Math.max(0, game.sliceT - dt);     // the swing stops being live
     game.guardT = Math.max(0, game.guardT - dt);     // ...and so does the tapped guard
     // the sights come up and down at a steady speed; a katana tap holds them up,
@@ -3844,7 +4574,7 @@ window.__range = {
       const f = targetFace(e);
       return f ? { x: f.x, y: f.y } : null;
     }
-    if (e.type === 'enemy') {
+    if (e.type === 'enemy' || e.type === 'knife') {
       const f = enemyFace(e);
       return f ? { x: f.x, y: f.bot - e.h * f.k * 0.62 } : null;   // chest height
     }
@@ -3910,6 +4640,38 @@ window.__range = {
   setAiming: function (on) { aiming = !!on; },
   get aiming() { return aiming; },
   setHp: function (v) { game.hp = clamp(v, 0, MAX_HP); updateHud(); },
-  bullets: function () { return game.bullets; }
+  bullets: function () { return game.bullets; },
+  step: step, updateEntities: updateEntities,
+  // knife men and the flamethrower
+  knifeReach: KNIFE_REACH, knifeWindup: KNIFE_WINDUP, knifeMax: KNIFE_MAX,
+  knifeDamage: KNIFE_DAMAGE, knifeSpeed: KNIFE_SPEED, knifeCooldown: KNIFE_COOLDOWN,
+  get knivesNeeded() { return game.knivesNeeded; },
+  get knivesDone() { return game.knivesDone; },
+  get burned() { return game.burned; },
+  knifeMen: function () {
+    return game.entities.filter(function (e) { return e.type === 'knife'; });
+  },
+  spawnKnife: function (opts) {
+    opts = opts || {};
+    const a = opts.angle === undefined ? 0 : opts.angle;
+    const d = opts.dist === undefined ? 7 : opts.dist;
+    const e = {
+      type: 'knife', x: cam.x + Math.sin(a) * d, z: cam.z + Math.cos(a) * d,
+      h: 1.74, r: 0.38, state: 'alive', t: 0, drop: 0, alpha: 1,
+      speed: opts.speed === undefined ? KNIFE_SPEED[0] : opts.speed,
+      stride: 0, swing: 0, cool: opts.cool === undefined ? 0 : opts.cool,
+      burn: 0, burnFrom: 0, ember: rand(0, TAU), jacket: randInt(0, 3)
+    };
+    e.hx = e.x; e.hz = e.z;
+    game.entities.push(e);
+    return e;
+  },
+  flameRange: FLAME_RANGE, flameTol: FLAME_TOL, flameBurn: FLAME_BURN,
+  flameJet: FLAME_JET, flameScorch: FLAME_SCORCH,
+  entityAnchor: entityAnchor, flameDistance: flameDistance, flameTargets: flameTargets,
+  ignite: ignite, scorch: scorch, sprayFlame: sprayFlame,
+  get flameT() { return gun.flameT; },
+  drawFlamethrower: drawFlamethrower, drawFlameJet: drawFlameJet, drawKnife: drawKnife,
+  drawBurn: drawBurn
 };
 

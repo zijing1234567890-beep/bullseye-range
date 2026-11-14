@@ -36,6 +36,12 @@
         <span class="mcount" id="enemyProg">0 / 0</span>
         <span class="bar"><i id="enemyBar"></i></span>
       </div>
+      <div class="mission">
+        <span class="icon icon-knife" aria-hidden="true"></span>
+        <span class="mname">Knives</span>
+        <span class="mcount" id="knifeProg">0 / 0</span>
+        <span class="bar"><i id="knifeBar"></i></span>
+      </div>
     </div>
 
     <div class="panel stats">
@@ -57,6 +63,7 @@
         <button class="gun-chip" type="button" data-gun="katana"><b>4</b> Katana</button>
         <button class="gun-chip" type="button" data-gun="energy"><b>5</b> Energy pistols</button>
         <button class="gun-chip" type="button" data-gun="sniper"><b>6</b> Sniper</button>
+        <button class="gun-chip" type="button" data-gun="flame"><b>7</b> Flamethrower</button>
       </div>
     </div>
 
@@ -73,7 +80,7 @@
       <span class="reload-hint" id="reloadHint">press R</span>
       <span class="charge-hint" id="chargeHint">charged</span>
     </div>
-    <div class="panel hints">Left click fires &middot; right click aims (the sniper raises a scope) &middot; with the katana, right click sends their bullets back at them and swinging slices them &middot; 1 / 2 / 3 / 4 / 5 / 6 (or wheel) switch gun &middot; F med kit &middot; R reloads &middot; A / D turn &middot; P pause</div>
+    <div class="panel hints">Left click fires &middot; right click aims (the sniper raises a scope) &middot; with the katana, right click sends their bullets back at them and swinging slices them &middot; the flamethrower burns whatever the jet touches &middot; 1&ndash;7 (or wheel) switch gun &middot; F med kit &middot; R reloads &middot; A / D turn &middot; P pause</div>
   </div>
 </div>
 
@@ -82,9 +89,10 @@
     <h1 id="ovTitle">Bullseye Range</h1>
     <p class="sub" id="ovSub">A first-person shooting gallery</p>
     <div id="ovBody">
-      <p>You are the shooter on the range with three guns and a katana. Knock the
+      <p>You are the shooter on the range, with a rack of guns, a katana and a
+        flamethrower. Knock the
         <b class="c-red">targets</b> down, drop the <b class="c-blue">flags</b>, and put down the
-        <b class="c-red">shooters</b> who fire back at you.</p>
+        <b class="c-red">shooters</b> who fire back at you, and the men with knives who walk at you.</p>
       <p>Drop a <b class="c-red">shooter</b> and he may leave a glowing <b class="c-blue">energy
         cell</b> where he fell &mdash; it drifts into your hands on its own. Three cells load the
         <b class="c-blue">energy pistols</b> (key <kbd>5</kbd>) and for the rest of the round they
@@ -92,6 +100,11 @@
       <p>The same bargain buys the <b class="c-gold">sniper rifle</b> (key <kbd>6</kbd>) &mdash; only
         the shooters leave <b class="c-gold">cartridge rounds</b> instead of cells. Three rounds load
         it; right click puts your eye to the scope.</p>
+      <p>And then there are the men with <b class="c-red">knives</b>: no pistol, no cover, and no
+        intention of stopping. They walk you down and cut you at arm's length &mdash; the blade coming
+        up over the shoulder is the only warning you get. Put them down with anything in the rack, or
+        take the <b class="c-gold">flamethrower</b> (key <kbd>7</kbd>): its jet sets whatever it washes
+        over alight, and a burning man drops where he stands. A raised katana turns his blade, too.</p>
       <p>Hit every quota to move on to the next level. Higher levels add more&mdash;and faster&mdash;
         targets, flags and gunmen. Take a round and your health drops; <kbd>F</kbd> patches
         you up with a med kit. The katana cuts them down if you get close enough, and if you
@@ -102,7 +115,7 @@
         <li><kbd>Mouse</kbd> aim the crosshair</li>
         <li><kbd>Left click</kbd> fire &mdash; hold it down to keep firing</li>
         <li><kbd>Right click</kbd> aim down the sights (with the katana: raise the guard and send their rounds back at them)</li>
-        <li><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd><kbd>5</kbd><kbd>6</kbd> AK-47 &middot; pistol &middot; shotgun &middot; katana &middot; energy pistols &middot; sniper</li>
+        <li><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd><kbd>5</kbd><kbd>6</kbd><kbd>7</kbd> AK-47 &middot; pistol &middot; shotgun &middot; katana &middot; energy pistols &middot; sniper &middot; flamethrower</li>
         <li><kbd>F</kbd> med kit &middot; <kbd>R</kbd> reload &middot; <kbd>A</kbd><kbd>D</kbd> turn &middot; <kbd>P</kbd> pause</li>
       </ul>
     </div>
