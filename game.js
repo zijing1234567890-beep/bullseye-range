@@ -375,8 +375,20 @@ const AIM_TURN = 0.45;             // turning is slower down the sights
 const AIM_SPREAD = 0.42;           // ...and pellets/shot scatter tighten up
 const AIM_REF = { x: 0.5, y: 0.42 };   // where the view points with the mouse at rest
 const SIGHT_DROP = 22;             // px the muzzle sits below that point when sighted in
+const AIM_SHRINK = 0.62;           // how much smaller the held weapon is drawn down the sights
 function aimBlend() {
   return gun.aim;
+}
+
+// Sighted in, a weapon is drawn smaller, shrinking towards the aim point, so the
+// stock and the arms sit in the lower corner instead of across the view. The barrel
+// tip still lands on the aim point and the barrel still points at it: gunTransform()
+// scales the pose about that point, which leaves every line through it untouched.
+// A weapon may ask for its own size (`aimScale`); a scoped rifle keeps full size,
+// since its own artwork opens out into the sight picture.
+function gunAimScale(w) {
+  if (!w.sightLine) return 1;
+  return lerp(1, w.aimScale !== undefined ? w.aimScale : AIM_SHRINK, aimBlend());
 }
 
 // Sighting in pulls the view in; a scoped rifle pulls it in far more (see `zoom`).
@@ -503,6 +515,7 @@ const WEAPONS = [
     tilt: SNIPER_ANGLE,                        // the art's own pitch, taken out when sighted in
     zoom: 2.6,                                 // down the scope the view closes right up
     scope: true,                               // ...and the sight itself is drawn
+    aimScale: 1,                               // the sight picture is the whole pose: full size
     recoilRise: 0.05, reloadRise: 0.30, reloadTilt: 0.34,
     muzzle: { x: -249, y: -313 },              // = rotate(-400, -8) by SNIPER_ANGLE
     draw: drawSniper, sound: 'crack', ammo: 0
@@ -581,6 +594,9 @@ const cross = { x: 0, y: 0, hover: false };
 let lastShotAt = -10;
 let triggerHeld = false;          // true while the left mouse button / touch / space is down
 let aiming = false;               // true while the right mouse button is held
+// A shot from the shoulder throws the sight picture down: the sniper has to be
+// re-shouldered (right button released and pressed again) before it scopes again.
+let sightKicked = false;
 
 function selectWeapon(id) {
   const idx = typeof id === 'number' ? id : WEAPONS.findIndex(w => w.id === id);
@@ -590,6 +606,7 @@ function selectWeapon(id) {
   gun.recoil = 0;
   gun.flash = 0;
   lastShotAt = game.time - 10;    // the new gun is ready to fire straight away
+  sightKicked = false;            // a fresh weapon is shouldered cleanly
   maybeCharge();                  // take the pistols out with three cells and they load
   maybeLoadSniper();              // ...and the rifle with three cartridge rounds
   Sound.pick();
@@ -1180,6 +1197,7 @@ function hurt(n, screenX) {
 function playerDown() {
   game.state = 'down';
   aiming = false;
+  sightKicked = false;
   triggerHeld = false;
   gun.aim = 0;
   game.guardT = 0;
@@ -1502,6 +1520,11 @@ function fire() {
   cross.x = aimX; cross.y = aimY;
   if (anyHit) game.hits++;                 // accuracy counts shots that connected
 
+  // A shot fired off the shoulder throws the scoped rifle's sight picture down: the
+  // bolt has to be cycled and the rifle re-shouldered, so the player releases the
+  // right button and presses it again. Fired from the hip, there is nothing to drop.
+  if (w.sniper && aimBlend() > 0.5) sightKicked = true;
+
   if (w.sound === 'boom') Sound.boom();
   else if (w.sound === 'zap') Sound.zap();
   else if (w.sound === 'crack') Sound.crack();
@@ -1582,6 +1605,7 @@ function startGame() {
   game.healing = 0;
   game.healLeft = 0;
   game.hurtFlash = 0;
+  sightKicked = false;
   spawnLevel(1);
   game.state = 'playing';
   lastShotAt = game.time;
@@ -2331,12 +2355,13 @@ function gunTransform() {
   const reloadDrop = gun.reloading > 0 ? Math.sin(progress * Math.PI) : 0;
   // hip position, then the sighted-in position the right mouse button blends to.
   // Sighted in, a gun is held straight: level (its own pitch taken out), square to
-  // the world, with its muzzle on the point the view is aimed at.
+  // the world, drawn a little smaller (gunAimScale) so the view stays clear.
   let sx = w.sightX, sy = w.sightY, srot = w.sightRot;
   if (w.sightLine) {
+    const k = w.aimScale !== undefined ? w.aimScale : AIM_SHRINK;   // drawn size down the sights
     const m = gunMuzzleOffset(w, 1, false);       // ...the barrel tip once it is level
-    sx = (W * AIM_REF.x - m.x) / W;
-    sy = (H * AIM_REF.y + SIGHT_DROP - m.y) / H;
+    sx = (W * AIM_REF.x - m.x * k) / W;
+    sy = (H * AIM_REF.y + SIGHT_DROP - m.y * k) / H;
     srot = 0;
   }
   const ax = lerp(w.anchorX, sx, aim);
@@ -2358,9 +2383,11 @@ function gunMuzzle() {
   const w = currentGun();
   const t = gunTransform();
   // a pair of pistols trades hands shot for shot
+  const k = gunAimScale(w);                 // the pose is drawn smaller down the sights
   const off = gunMuzzleOffset(w, aimBlend(), !!(w.altMuzzle && game.shots % 2 === 1));
+  const ox = off.x * k, oy = off.y * k;
   const cos = Math.cos(t.rot), sin = Math.sin(t.rot);
-  return { x: t.x + off.x * cos - off.y * sin, y: t.y + off.x * sin + off.y * cos };
+  return { x: t.x + ox * cos - oy * sin, y: t.y + ox * sin + oy * cos };
 }
 
 function rrect(x, y, w, h, r) {
@@ -3450,7 +3477,7 @@ function drawMuzzleFlash() {
   const m = gunMuzzle();
   const mx = m.x, my = m.y;
   const a = clamp(gun.flash, 0, 1);
-  const r = (54 + 42 * a) * gunScale() * w.flashScale;
+  const r = (54 + 42 * a) * gunScale() * gunAimScale(w) * w.flashScale;
 
   const bolt = !!w.bolt;
   const g = ctx.createRadialGradient(mx, my, 0, mx, my, r * 1.7);
@@ -3483,7 +3510,7 @@ function drawMuzzleFlash() {
 function drawGun() {
   const w = currentGun();
   const t = gunTransform();
-  const s = gunScale();
+  const s = gunScale() * gunAimScale(w);   // sighted in, the weapon is drawn smaller
   ctx.save();
   // down a scope the rifle itself gives way to the sight picture (see drawScope)
   if (w.scope) ctx.globalAlpha = 1 - clamp((aimBlend() - 0.35) / 0.45, 0, 1);
@@ -3669,6 +3696,7 @@ canvas.addEventListener('mousedown', e => {
   if (e.button === 2) {            // right button: bring the gun up to the sights
     setCross(e.clientX, e.clientY);
     aiming = true;
+    sightKicked = false;                           // a fresh shoulder brings the sights up
     if (katanaOut()) game.guardT = GUARD_LATCH;   // the guard covers a quick tap too
     return;
   }
@@ -3678,10 +3706,10 @@ canvas.addEventListener('mousedown', e => {
   fire();
 });
 window.addEventListener('mouseup', e => {
-  if (e.button === 2) aiming = false;
+  if (e.button === 2) { aiming = false; sightKicked = false; }   // re-shouldering resets it
   else triggerHeld = false;
 });
-window.addEventListener('blur', () => { triggerHeld = false; aiming = false; });
+window.addEventListener('blur', () => { triggerHeld = false; aiming = false; sightKicked = false; });
 canvas.addEventListener('touchstart', e => {
   e.preventDefault();
   const t = e.changedTouches[0];
@@ -3754,9 +3782,10 @@ function step(dt) {
     gun.flash = Math.max(0, gun.flash - dt * 9);
     game.sliceT = Math.max(0, game.sliceT - dt);     // the swing stops being live
     game.guardT = Math.max(0, game.guardT - dt);     // ...and so does the tapped guard
-    // the sights come up and down at a steady speed; a katana tap holds them up
-    const aimTarget = ((aiming || (game.guardT > 0 && katanaOut())) && game.state === 'playing')
-      ? 1 : 0;
+    // the sights come up and down at a steady speed; a katana tap holds them up,
+    // and a shot off the sniper's shoulder keeps them down until it is re-shouldered
+    const aimTarget = (((aiming && !sightKicked) || (game.guardT > 0 && katanaOut()))
+      && game.state === 'playing') ? 1 : 0;
     gun.aim += clamp(aimTarget - gun.aim, -dt / 0.16, dt / 0.16);
     updateCamera(dt);
   }
@@ -3801,11 +3830,14 @@ window.__range = {
   startGame: startGame, nextLevel: nextLevel, spawnLevel: spawnLevel,
   startReload: startReload, completeLevel: completeLevel,
   drawGun: drawGun, gunTransform: gunTransform, gunScale: gunScale,
-  gunMuzzleOffset: gunMuzzleOffset, sightDrop: SIGHT_DROP, aimRef: AIM_REF,
+  gunMuzzleOffset: gunMuzzleOffset, aimRef: AIM_REF,
+  gunAimScale: gunAimScale,
+  get sightDrop() { return SIGHT_DROP; },
   gunPitch: gunPitch, gunTilt: function () { return currentGun().tilt || 0; },
   armWrist: armWrist,
   aimBlend: aimBlend,
   get triggerHeld() { return triggerHeld; },
+  get sightKicked() { return sightKicked; },
   focalLength: focalLength, gunMuzzle: gunMuzzle, targetFace: targetFace, flagShape: flagShape,
   entityPoint: function (e) {
     if (e.type === 'target') {
