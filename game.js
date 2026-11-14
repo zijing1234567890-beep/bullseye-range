@@ -389,6 +389,8 @@ const ENEMY_AIM = 0.72;           // how long an enemy lines you up before firin
 const SLICE_REACH = 3.0;          // the katana sweeps this far around you
 const SLICE_TIME = 0.26;          // ...and the swing stays live this long
 const SLICE_POINTS = 75;          // for cutting a round out of the air
+const GUARD_LATCH = 0.55;         // a right click keeps the guard up this long
+const GUARD_REACH = 2.6;          // ...and it turns rounds aside within this bubble
 
 const game = {
   state: 'menu',                 // menu | playing | paused | levelclear | down
@@ -406,6 +408,8 @@ const game = {
   deflects: 0,
   slices: 0,                     // rounds cut out of the air
   sliceT: 0,                     // seconds the current swing stays live
+  guardT: 0,                     // seconds the raised guard stays up after a tap
+  lastDeflect: null,             // where the last round was turned aside
   hp: MAX_HP,
   medKits: MED_KITS,
   healing: 0,                    // seconds of med kit left to apply
@@ -566,6 +570,7 @@ function spawnLevel(n) {
   game.sparks.length = 0;
   game.bullets.length = 0;
   game.sliceT = 0;
+  game.guardT = 0;
   WEAPONS.forEach(w => { w.ammo = w.mag; });    // every weapon starts a level loaded
   gun.reloading = 0;
   cam.yaw = 0;
@@ -701,6 +706,11 @@ function updateBullets(dt) {
       game.bullets.splice(i, 1);
       continue;
     }
+    if (inGuardReach(b)) {                 // the raised blade knocks it away in the air
+      turnAside(b);
+      game.bullets.splice(i, 1);
+      continue;
+    }
     if (u >= 1 || b.life <= 0) {
       resolveBullet(b);
       game.bullets.splice(i, 1);
@@ -733,7 +743,35 @@ function sliceBullet(b) {
 }
 
 function katanaOut() { return currentGun().melee === true; }
-function guarding() { return katanaOut() && gun.aim > 0.5; }
+
+// The guard is up while the right button is held, and stays up for a moment after a
+// tap of it: a quick right click should fend a round off, not only a long press.
+function guarding() { return katanaOut() && (gun.aim > 0.5 || game.guardT > 0); }
+
+// Is this round inside the bubble the raised blade covers? All angles: the guard
+// goes up over the head, so it fends off shots from anywhere.
+function inGuardReach(b) {
+  if (!guarding()) return false;
+  return Math.hypot(b.x - cam.x, b.y - cam.y, b.z - cam.z) <= GUARD_REACH;
+}
+
+// Knock a round off its line before it ever reaches you: sparks where the blade
+// meets it, a tracer off to one side, and a DEFLECTED callout.
+function turnAside(b) {
+  const p = project(b.x, b.y, b.z);
+  const sx = p ? p.x : W * 0.5, sy = p ? p.y : H * 0.5;
+
+  game.deflects++;
+  game.lastDeflect = { x: b.x, y: b.y, z: b.z };
+  Sound.deflect();
+  burst(sx, sy, '#ffe9b0', 18, 320);
+  addTracer({ x: sx, y: sy }, { x: sx + rand(-90, 90), y: sy + rand(-90, 90) }, true);
+  game.pops.push({
+    x: b.x, y: b.y, z: b.z, text: 'DEFLECTED',
+    life: 0.9, max: 0.9, color: '#bfe9ff'
+  });
+  updateHud();
+}
 
 // The blade turns a round aside if it is out and the shot comes from the front,
 // or from any angle at all while the guard is raised.
@@ -750,14 +788,7 @@ function resolveBullet(b) {
   const sx = p ? p.x : W * 0.5, sy = p ? p.y : H * 0.5;
 
   if (deflectsShot(b)) {
-    game.deflects++;
-    Sound.deflect();
-    burst(sx, sy, '#ffe9b0', 18, 320);
-    addTracer({ x: sx, y: sy }, { x: sx + rand(-90, 90), y: sy + rand(-90, 90) }, true);
-    game.pops.push({
-      x: b.x, y: b.y, z: b.z, text: 'DEFLECTED',
-      life: 0.9, max: 0.9, color: '#bfe9ff'
-    });
+    turnAside(b);
     return;
   }
 
@@ -782,6 +813,7 @@ function playerDown() {
   aiming = false;
   triggerHeld = false;
   gun.aim = 0;
+  game.guardT = 0;
   Sound.pick();
   showOverlay('down', {
     kills: game.kills, deflects: game.deflects, slices: game.slices, acc: accuracy()
@@ -1132,6 +1164,8 @@ function startGame() {
   game.deflects = 0;
   game.slices = 0;
   game.sliceT = 0;
+  game.guardT = 0;
+  game.lastDeflect = null;
   game.time = 0;
   game.bestLevel = 1;
   game.hp = MAX_HP;
@@ -2625,6 +2659,7 @@ canvas.addEventListener('mousedown', e => {
   if (e.button === 2) {            // right button: bring the gun up to the sights
     setCross(e.clientX, e.clientY);
     aiming = true;
+    if (katanaOut()) game.guardT = GUARD_LATCH;   // the guard covers a quick tap too
     return;
   }
   if (e.button !== 0) return;      // only the left button pulls the trigger
@@ -2708,8 +2743,10 @@ function step(dt) {
     gun.recoil = Math.max(0, gun.recoil - dt * 4.2);
     gun.flash = Math.max(0, gun.flash - dt * 9);
     game.sliceT = Math.max(0, game.sliceT - dt);     // the swing stops being live
-    // the sights come up and down at a steady speed
-    const aimTarget = (aiming && game.state === 'playing') ? 1 : 0;
+    game.guardT = Math.max(0, game.guardT - dt);     // ...and so does the tapped guard
+    // the sights come up and down at a steady speed; a katana tap holds them up
+    const aimTarget = ((aiming || (game.guardT > 0 && katanaOut())) && game.state === 'playing')
+      ? 1 : 0;
     gun.aim += clamp(aimTarget - gun.aim, -dt / 0.16, dt / 0.16);
     updateCamera(dt);
   }
@@ -2780,6 +2817,8 @@ window.__range = {
   useMedKit: useMedKit, tickHeal: tickHeal, updateBullets: updateBullets, hurt: hurt,
   guarding: guarding, deflectsShot: deflectsShot, playerDown: playerDown,
   sliceBullet: sliceBullet, inSliceReach: inSliceReach, sliceReach: SLICE_REACH,
+  turnAside: turnAside, inGuardReach: inGuardReach,
+  guardReach: GUARD_REACH, guardLatch: GUARD_LATCH,
   // a round put on the range by hand, for the headless tests
   spawnBullet: function (opts) {
     opts = opts || {};
