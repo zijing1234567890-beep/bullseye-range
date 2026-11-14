@@ -674,6 +674,7 @@ function enemyFire(e) {
   }
 
   game.bullets.push({
+    from: e,                          // who fired it: a round turned aside goes back to him
     x0: m.x, y0: m.y, z0: m.z,
     x: m.x, y: m.y, z: m.z,
     tx: tx, ty: ty, tz: tz,
@@ -701,19 +702,21 @@ function updateBullets(dt) {
     b.x = lerp(b.x0, b.tx, u);
     b.y = lerp(b.y0, b.ty, u);
     b.z = lerp(b.z0, b.tz, u);
-    if (inSliceReach(b)) {                 // a live swing catches it on the way in
-      sliceBullet(b);
-      game.bullets.splice(i, 1);
-      continue;
-    }
-    if (inGuardReach(b)) {                 // the raised blade knocks it away in the air
-      turnAside(b);
-      game.bullets.splice(i, 1);
-      continue;
+    // A round already on its way back is past all of this: nothing on the range
+    // catches it twice, and it answers only to the shooter it was sent at.
+    if (!b.returning) {
+      if (inSliceReach(b)) {               // a live swing catches it on the way in
+        sliceBullet(b);
+        game.bullets.splice(i, 1);
+        continue;
+      }
+      if (inGuardReach(b)) {               // the raised blade turns it back on the shooter
+        turnAside(b);
+        continue;                          // ...and it keeps flying, the other way
+      }
     }
     if (u >= 1 || b.life <= 0) {
-      resolveBullet(b);
-      game.bullets.splice(i, 1);
+      if (!resolveBullet(b)) game.bullets.splice(i, 1);
     }
   }
 }
@@ -756,7 +759,8 @@ function inGuardReach(b) {
 }
 
 // Knock a round off its line before it ever reaches you: sparks where the blade
-// meets it, a tracer off to one side, and a DEFLECTED callout.
+// meets it, a DEFLECTED callout, and then it is on its way back at the man who
+// fired it.
 function turnAside(b) {
   const p = project(b.x, b.y, b.z);
   const sx = p ? p.x : W * 0.5, sy = p ? p.y : H * 0.5;
@@ -765,12 +769,66 @@ function turnAside(b) {
   game.lastDeflect = { x: b.x, y: b.y, z: b.z };
   Sound.deflect();
   burst(sx, sy, '#ffe9b0', 18, 320);
-  addTracer({ x: sx, y: sy }, { x: sx + rand(-90, 90), y: sy + rand(-90, 90) }, true);
   game.pops.push({
     x: b.x, y: b.y, z: b.z, text: 'DEFLECTED',
     life: 0.9, max: 0.9, color: '#bfe9ff'
   });
+
+  sendBack(b);                             // whipped straight back at the man who fired it
+  const q = project(b.tx, b.ty, b.tz);
+  addDeflectTracer(sx, sy, q);
   updateHud();
+}
+
+// The streak off the blade. A round turned aside behind you has nowhere sensible to
+// point at, so it just flicks a short streak across the eye line instead.
+function addDeflectTracer(sx, sy, q) {
+  const x2 = q && Number.isFinite(q.x) ? q.x : sx + rand(-90, 90);
+  const y2 = q && Number.isFinite(q.y) ? q.y : sy + rand(-90, 90);
+  if (!Number.isFinite(sx) || !Number.isFinite(sy) ||
+      !Number.isFinite(x2) || !Number.isFinite(y2)) return;
+  addTracer({ x: sx, y: sy }, { x: x2, y: y2 }, true);
+}
+
+// Turn a round round: it keeps the same flight, but now it is aimed at the shooter
+// who fired it. The muzzle is left where the round came from so a shot with no man
+// behind it still has somewhere to go (and harmlessly cracks off the range).
+function sendBack(b) {
+  const e = b.from;
+  const live = e && e.state === 'alive';
+  const fin = Number.isFinite;
+  const ox = fin(b.x0) ? b.x0 : b.x, oy = fin(b.y0) ? b.y0 : b.y, oz = fin(b.z0) ? b.z0 : b.z;
+  b.returning = true;
+  b.to = live ? e : null;
+  b.x0 = b.x; b.y0 = b.y; b.z0 = b.z;
+  b.tx = live ? e.hx : ox;
+  b.ty = live ? 1.15 : oy;
+  b.tz = live ? e.hz : oz;
+  b.dist = Math.hypot(b.tx - b.x0, b.ty - b.y0, b.tz - b.z0);
+  if (!fin(b.dist) || b.dist < 0.001) b.dist = 1;
+  b.travelled = 0;
+  b.speed = Math.max(b.speed, 120);        // it comes back harder than it left
+  b.life = Math.max(b.life, b.dist / b.speed + 0.25);
+  return b;
+}
+
+// It arrives. If the man who fired it is still standing where he was, his own round
+// puts him down; otherwise it puffs into the dirt behind where he stood.
+function returnHit(b) {
+  const p = project(b.x, b.y, b.z);
+  const sx = p ? p.x : W * 0.5, sy = p ? p.y : H * 0.5;
+  const e = b.to;
+
+  if (e && e.state === 'alive' && Math.hypot(e.hx - b.tx, e.hz - b.tz) <= 1.4) {
+    game.pops.push({
+      x: b.tx, y: 1.85, z: b.tz, text: 'RETURNED',
+      life: 1.0, max: 1.0, color: '#ffd166'
+    });
+    applyHit({ e: e, hit: { x: sx, y: sy, depth: b.dist, head: false } });
+    return true;
+  }
+  burst(sx, sy, '#9fb3c8', 6, 160);
+  return false;
 }
 
 // The blade turns a round aside if it is out and the shot comes from the front,
@@ -787,13 +845,18 @@ function resolveBullet(b) {
   const p = project(b.x, b.y, b.z);
   const sx = p ? p.x : W * 0.5, sy = p ? p.y : H * 0.5;
 
+  // Returns true while the round lives on: one turned back keeps flying, the other
+  // way this time, so the caller must leave it in the air.
+  if (b.returning) { returnHit(b); return false; }  // a round sent back answers to the shooter
+
   if (deflectsShot(b)) {
-    turnAside(b);
-    return;
+    turnAside(b);                                   // ...and it is on its way back to him
+    return !!b.returning;
   }
 
-  if (!b.aimed) { burst(sx, sy, '#9fb3c8', 6, 150); return; }
+  if (!b.aimed) { burst(sx, sy, '#9fb3c8', 6, 150); return false; }
   hurt(randInt(7, 13), sx);
+  return false;
 }
 
 /* ---------------- health & the med kit ---------------- */
@@ -2818,6 +2881,7 @@ window.__range = {
   guarding: guarding, deflectsShot: deflectsShot, playerDown: playerDown,
   sliceBullet: sliceBullet, inSliceReach: inSliceReach, sliceReach: SLICE_REACH,
   turnAside: turnAside, inGuardReach: inGuardReach,
+  sendBack: sendBack, returnHit: returnHit, spawnLevel: spawnLevel,
   guardReach: GUARD_REACH, guardLatch: GUARD_LATCH,
   // a round put on the range by hand, for the headless tests
   spawnBullet: function (opts) {
