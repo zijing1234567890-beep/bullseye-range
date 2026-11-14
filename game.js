@@ -278,9 +278,55 @@ const Sound = (function () {
     [523, 784, 1046].forEach((f, i) => beep(f, t + i * 0.11, 0.42, 0.16, 'sine'));
   }
 
+  function zap() {                        // energy bolt: a bright electric crack
+    if (!ensure()) return;
+    const t = ac.currentTime;
+    const src = noise(0.16);
+    const hp = ac.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.setValueAtTime(1100, t);
+    hp.frequency.exponentialRampToValueAtTime(4400, t + 0.1);
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.4, t);
+    g.gain.exponentialRampToValueAtTime(0.0008, t + 0.13);
+    src.connect(hp); hp.connect(g); g.connect(master);
+    src.start(t); src.stop(t + 0.15);
+    const o = ac.createOscillator();
+    o.type = 'square';
+    o.frequency.setValueAtTime(1750, t);
+    o.frequency.exponentialRampToValueAtTime(320, t + 0.13);
+    const g2 = ac.createGain();
+    g2.gain.setValueAtTime(0.15, t);
+    g2.gain.exponentialRampToValueAtTime(0.0008, t + 0.15);
+    o.connect(g2); g2.connect(master);
+    o.start(t); o.stop(t + 0.17);
+  }
+
+  function pickup() {                     // a cell drawn into your hands
+    if (!ensure()) return;
+    const t = ac.currentTime;
+    beep(988, t, 0.13, 0.2, 'sine');
+    beep(1480, t + 0.06, 0.2, 0.18, 'sine');
+  }
+
+  function load() {                       // the pistols charging up
+    if (!ensure()) return;
+    const t = ac.currentTime;
+    const o = ac.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(210, t);
+    o.frequency.exponentialRampToValueAtTime(1760, t + 0.34);
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.13, t);
+    g.gain.exponentialRampToValueAtTime(0.0008, t + 0.38);
+    o.connect(g); g.connect(master);
+    o.start(t); o.stop(t + 0.4);
+    beep(1760, t + 0.3, 0.3, 0.2, 'triangle');
+  }
+
   return {
     ensure, shot, boom, pick, hit, flagHit, emptyClick, reloadMech, levelUp, gameStart,
-    enemyShot, deflect, slice, slash, hurt, heal
+    enemyShot, deflect, slice, slash, hurt, heal, zap, pickup, load
   };
 })();
 
@@ -292,6 +338,8 @@ const cam = { x: 0, z: 0, y: 1.68, yaw: 0, pitch: 0, shake: 0 };
 const AIM_ZOOM = 0.42;             // how much tighter the field of view gets
 const AIM_TURN = 0.45;             // turning is slower down the sights
 const AIM_SPREAD = 0.42;           // ...and pellets/shot scatter tighten up
+const AIM_REF = { x: 0.5, y: 0.42 };   // where the view points with the mouse at rest
+const SIGHT_DROP = 22;             // px the muzzle sits below that point when sighted in
 function aimBlend() {
   return gun.aim;
 }
@@ -331,7 +379,7 @@ const WEAPONS = [
     recoil: 0.62, kick: 0.0032, shake: 0.6,
     flashScale: 1, flashSpikes: 5,
     anchorX: 0.62, anchorY: 0.93, baseRot: -0.34,
-    sightX: 0.50, sightY: 0.86, sightRot: -0.17,   // right-click: cheek to the stock
+    sightLine: true,                           // right-click: held square on the aim point
     recoilRise: 0.035, reloadRise: 0.30, reloadTilt: 0.34,
     muzzle: { x: -219, y: -286 },              // = rotate(-360, -6) by RIFLE_ANGLE
     draw: drawAK47, sound: 'shot', ammo: 30
@@ -343,7 +391,7 @@ const WEAPONS = [
     recoil: 0.5, kick: 0.0026, shake: 0.5,
     flashScale: 0.72, flashSpikes: 5,
     anchorX: 0.62, anchorY: 0.93, baseRot: -0.34,
-    sightX: 0.50, sightY: 0.83, sightRot: -0.12,
+    sightLine: true,
     recoilRise: 0.035, reloadRise: 0.30, reloadTilt: 0.34,
     muzzle: { x: -238, y: -233 },
     draw: drawPistol, sound: 'shot', ammo: 12
@@ -355,7 +403,7 @@ const WEAPONS = [
     recoil: 1.5, kick: 0.011, shake: 1.4,
     flashScale: 1.5, flashSpikes: 7,
     anchorX: 0.60, anchorY: 0.95, baseRot: -0.30,
-    sightX: 0.50, sightY: 0.88, sightRot: -0.15,
+    sightLine: true,
     recoilRise: 0.05, reloadRise: 0.32, reloadTilt: 0.30,
     muzzle: { x: -249, y: -314 },
     draw: drawShotgun, sound: 'boom', ammo: 6
@@ -374,6 +422,21 @@ const WEAPONS = [
     recoilRise: 0.02, reloadRise: 0, reloadTilt: 0,
     muzzle: { x: -110, y: -240 },
     draw: drawKatana, sound: 'slash', ammo: 0
+  },
+  {
+    // Earned rather than reloaded: three energy cells pried off the shooters you
+    // drop charge this pair up, and while charged they never run dry.
+    id: 'energy', name: 'Energy pistols', key: '5', code: 'Digit5',
+    energy: true, mag: 0, reload: 0, interval: 0.13,
+    pellets: 1, spread: 0,
+    recoil: 0.62, kick: 0.0021, shake: 0.6,
+    flashScale: 1.05, flashSpikes: 6, bolt: true,
+    anchorX: 0.60, anchorY: 0.95, baseRot: -0.26,
+    sightLine: true,
+    recoilRise: 0.03, reloadRise: 0, reloadTilt: 0,
+    muzzle: { x: -270, y: -231 },              // right-hand pistol
+    altMuzzle: { x: 270, y: -231 },            // ...and the left: shots trade hands
+    draw: drawEnergyPistols, sound: 'zap', ammo: 0
   }
 ];
 let gunIndex = 0;
@@ -391,6 +454,10 @@ const SLICE_TIME = 0.26;          // ...and the swing stays live this long
 const SLICE_POINTS = 75;          // for cutting a round out of the air
 const GUARD_LATCH = 0.55;         // a right click keeps the guard up this long
 const GUARD_REACH = 2.6;          // ...and it turns rounds aside within this bubble
+const ENERGY_MAX = 3;             // cells that charge a pair of energy pistols
+const ENERGY_DROP_CHANCE = 0.45;  // how often a shooter you drop leaves one behind
+const ENERGY_SPEED = 8;           // a cell drifts toward your hands this fast, then faster
+let dropChance = ENERGY_DROP_CHANCE;   // the tests wind this up and down
 
 const game = {
   state: 'menu',                 // menu | playing | paused | levelclear | down
@@ -410,6 +477,8 @@ const game = {
   sliceT: 0,                     // seconds the current swing stays live
   guardT: 0,                     // seconds the raised guard stays up after a tap
   lastDeflect: null,             // where the last round was turned aside
+  energy: 0,                     // energy cells in hand, 0..ENERGY_MAX
+  charged: false,                // ...three of them light the energy pistols for the round
   hp: MAX_HP,
   medKits: MED_KITS,
   healing: 0,                    // seconds of med kit left to apply
@@ -446,6 +515,7 @@ function selectWeapon(id) {
   gun.recoil = 0;
   gun.flash = 0;
   lastShotAt = game.time - 10;    // the new gun is ready to fire straight away
+  maybeCharge();                  // take the pistols out with three cells and they load
   Sound.pick();
   updateHud();
   return true;
@@ -572,6 +642,9 @@ function spawnLevel(n) {
   game.sliceT = 0;
   game.guardT = 0;
   WEAPONS.forEach(w => { w.ammo = w.mag; });    // every weapon starts a level loaded
+  game.energy = 0;                              // cells do not survive the round
+  game.charged = false;
+  needHintAt = -10;
   gun.reloading = 0;
   cam.yaw = 0;
   cam.pitch = 0;
@@ -583,6 +656,28 @@ function spawnLevel(n) {
 function updateEntities(dt) {
   for (let i = game.entities.length - 1; i >= 0; i--) {
     const e = game.entities[i];
+    if (e.type === 'energy') {                       // a cell lifted off a dropped shooter
+      if (!isFinite(e.x) || !isFinite(e.z)) {        // a cell with no place on the range
+        game.entities.splice(i, 1);
+        continue;
+      }
+      e.t += dt;
+      const tx = cam.x + Math.sin(cam.yaw) * 0.5, tz = cam.z + Math.cos(cam.yaw) * 0.5;
+      const dx = tx - e.x, dz = tz - e.z;
+      const d = Math.hypot(dx, dz);
+      if (d > 0.001) {
+        const step = Math.min(d, (ENERGY_SPEED + e.t * ENERGY_SPEED) * dt);
+        e.x += (dx / d) * step;
+        e.z += (dz / d) * step;
+      }
+      e.hx = e.x; e.hz = e.z;
+      e.y = 1.12 + Math.sin(e.t * 5.5) * 0.07;
+      if (Math.hypot(e.x - cam.x, e.z - cam.z) < 0.85) {
+        collectEnergy(e);
+        game.entities.splice(i, 1);
+      }
+      continue;
+    }
     if (e.state === 'alive' && e.swayAmp > 0) {      // targets and shooters both walk a line
       const off = Math.sin(game.time * e.swaySpeed + e.wob) * e.swayAmp;
       const r = Math.hypot(e.x, e.z) || 1;
@@ -859,6 +954,71 @@ function resolveBullet(b) {
   return false;
 }
 
+/* =========================================================================
+   ENERGY CELLS & THE ENERGY PISTOLS
+   Drop a shooter and he may leave a glowing cell behind; it drifts to your
+   hands on its own. Three cells load the energy pistols, and for the rest of
+   the round they fire as long as you hold the trigger.
+   ========================================================================= */
+let needHintAt = -10;
+
+function energyRoll() {
+  return Math.random() < dropChance;
+}
+
+/* A cell left where a shooter went down. It lives in the entity list so the
+   depth sort and the projector place it like anything else on the range. */
+function dropEnergy(e) {
+  const cell = {
+    type: 'energy', x: e.hx, z: e.hz, hx: e.hx, hz: e.hz,
+    y: 1.12, state: 'cell', t: 0, wob: rand(0, TAU)
+  };
+  game.entities.push(cell);
+  game.pops.push({
+    x: e.hx, y: 1.75, z: e.hz, text: 'ENERGY CELL', life: 0.95, max: 0.95, color: '#8ceaff'
+  });
+  Sound.pickup();
+  return cell;
+}
+
+function collectEnergy(cell) {
+  game.energy = Math.min(ENERGY_MAX, game.energy + 1);
+  game.pops.push({
+    x: cell.x, y: 1.35, z: cell.z, text: 'ENERGY +1', life: 1, max: 1, color: '#8ceaff'
+  });
+  burst(cell.x, cell.y, '#7ef0ff', 16);
+  Sound.pickup();
+  maybeCharge();
+  updateHud();
+}
+
+/* Three cells and the pistols are in hand? Then they load themselves. */
+function maybeCharge() {
+  if (game.charged || !energyPistolsOut() || game.energy < ENERGY_MAX) return false;
+  game.energy = 0;
+  game.charged = true;
+  Sound.load();
+  game.pops.push({
+    x: cam.x, y: 1.95, z: cam.z + 2.4, text: 'CHARGED ∞', life: 1.3, max: 1.3, color: '#8ceaff'
+  });
+  updateHud();
+  return true;
+}
+
+function energyPistolsOut() {
+  return currentGun().energy === true;
+}
+
+/* An unloaded pair clicks, and says how many cells it is still short. */
+function needEnergy() {
+  if (game.time - needHintAt < 1.2) return;
+  needHintAt = game.time;
+  game.pops.push({
+    x: cam.x, y: 1.9, z: cam.z + 2.2,
+    text: 'ENERGY ' + game.energy + ' / ' + ENERGY_MAX, life: 1.15, max: 1.15, color: '#8ceaff'
+  });
+}
+
 /* ---------------- health & the med kit ---------------- */
 function hurt(n, screenX) {
   if (game.state !== 'playing') return;
@@ -1002,9 +1162,12 @@ function burst(x, y, color, n, spread) {
   }
 }
 
-function addTracer(from, to, strong) {
+function addTracer(from, to, strong, tint) {
   const life = strong ? 0.08 : 0.06;
-  game.tracers.push({ x1: from.x, y1: from.y, x2: to.x, y2: to.y, life: life, max: life, strong: !!strong });
+  game.tracers.push({
+    x1: from.x, y1: from.y, x2: to.x, y2: to.y,
+    life: life, max: life, strong: !!strong, tint: tint || null
+  });
 }
 
 /* ---------------- shooting ---------------- */
@@ -1027,6 +1190,8 @@ function applyHit(found) {
     });
     burst(found.hit.x, found.hit.y, '#e0564a', 22);
     Sound.hit();
+    // he may have been carrying a cell: it drops where he fell and drifts to you
+    if (!game.charged && game.energy < ENERGY_MAX && energyRoll()) dropEnergy(e);
     updateHud();
     maybeComplete();
     return;
@@ -1120,10 +1285,19 @@ function fire() {
   if (w.melee) { slash(); return; }              // the katana swings instead of firing
   if (gun.reloading > 0) return;
   if (game.time - lastShotAt < w.interval) return;
-  if (gun.ammo <= 0) { Sound.emptyClick(); startReload(); return; }
+  if (w.energy && !game.charged) {          // unloaded: it only clicks, and costs nothing
+    Sound.emptyClick();
+    needEnergy();
+    return;
+  }
+  if (!w.energy && gun.ammo <= 0) { Sound.emptyClick(); startReload(); return; }
 
   lastShotAt = game.time;
-  gun.ammo--;
+  if (w.energy) {                           // a charged pair answers to no magazine
+    needHintAt = -10;
+  } else {
+    gun.ammo--;
+  }
   gun.recoil = w.recoil;
   gun.flash = 1;
   cam.pitch += w.kick * (1 - aimBlend() * 0.35);   // braced against the shoulder: less climb
@@ -1147,7 +1321,7 @@ function fire() {
     const dx = cross.x - muzzle.x, dy = cross.y - muzzle.y;
     const len = Math.hypot(dx, dy) || 1;
     const impact = found ? found.hit : { x: cross.x + (dx / len) * 170, y: cross.y + (dy / len) * 170, depth: 999 };
-    addTracer(muzzle, impact, !!found);
+    addTracer(muzzle, impact, !!found, w.bolt ? 'bolt' : null);
 
     if (!found) { burst(cross.x, cross.y, '#cfd6e0', w.pellets > 1 ? 2 : 6, 180); continue; }
     if (struck.indexOf(found.e) !== -1) continue;   // a target only counts once per shot
@@ -1159,7 +1333,9 @@ function fire() {
   cross.x = aimX; cross.y = aimY;
   if (anyHit) game.hits++;                 // accuracy counts shots that connected
 
-  if (w.sound === 'boom') Sound.boom(); else Sound.shot();
+  if (w.sound === 'boom') Sound.boom();
+  else if (w.sound === 'zap') Sound.zap();
+  else Sound.shot();
   updateHud();
 }
 
@@ -1618,6 +1794,41 @@ function drawEnemy(e) {
   ctx.globalAlpha = 1;
 }
 
+function drawEnergyCell(e) {
+  const p = project(e.x, e.y, e.z);
+  if (!p || !isFinite(p.x) || !isFinite(p.y) || !isFinite(p.k)) return;
+  const r = clamp(p.k * 0.15, 3, 40);
+  const pulse = 0.72 + Math.sin(game.time * 7 + e.wob) * 0.28;
+
+  // halo
+  const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 4.2);
+  g.addColorStop(0, 'rgba(170, 246, 255, ' + (0.45 * pulse) + ')');
+  g.addColorStop(1, 'rgba(80, 210, 255, 0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, r * 4.2, 0, TAU);
+  ctx.fill();
+
+  // the cell itself: a lit capsule that rocks as it drifts
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  ctx.rotate(Math.sin(game.time * 1.8 + e.wob) * 0.35);
+  const cg = ctx.createLinearGradient(0, -r, 0, r);
+  cg.addColorStop(0, '#eafdff');
+  cg.addColorStop(0.45, '#7ae6ff');
+  cg.addColorStop(1, '#1f8ec4');
+  rrect(-r * 0.62, -r, r * 1.24, r * 2, r * 0.34);
+  ctx.fillStyle = cg;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(10, 26, 34, 0.55)';
+  ctx.lineWidth = Math.max(1, r * 0.12);
+  ctx.stroke();
+  rrect(-r * 0.26, -r * 0.62, r * 0.52, r * 1.24, r * 0.2);
+  ctx.fillStyle = 'rgba(255, 255, 255, ' + (0.55 + pulse * 0.4) + ')';
+  ctx.fill();
+  ctx.restore();
+}
+
 function drawEntities() {
   const list = [];
   for (let i = 0; i < game.entities.length; i++) {
@@ -1632,6 +1843,7 @@ function drawEntities() {
     const e = list[i].e;
     if (e.type === 'target') drawTarget(e);
     else if (e.type === 'enemy') drawEnemy(e);
+    else if (e.type === 'energy') drawEnergyCell(e);
     else drawFlag(e);
   }
 }
@@ -1642,9 +1854,10 @@ function drawEffects() {
     const t = game.tracers[i];
     const a = clamp(t.life / t.max, 0, 1) * (t.strong ? 0.9 : 0.5);
     const g = ctx.createLinearGradient(t.x1, t.y1, t.x2, t.y2);
-    g.addColorStop(0, 'rgba(255, 236, 170, 0)');
-    g.addColorStop(0.25, 'rgba(255, 232, 160, ' + a + ')');
-    g.addColorStop(1, 'rgba(255, 250, 220, 0)');
+    const bolt = t.tint === 'bolt';                 // the energy pistols leave a blue streak
+    g.addColorStop(0, bolt ? 'rgba(120, 230, 255, 0)' : 'rgba(255, 236, 170, 0)');
+    g.addColorStop(0.25, bolt ? 'rgba(150, 240, 255, ' + a + ')' : 'rgba(255, 232, 160, ' + a + ')');
+    g.addColorStop(1, bolt ? 'rgba(226, 250, 255, 0)' : 'rgba(255, 250, 220, 0)');
     ctx.strokeStyle = g;
     ctx.lineWidth = t.strong ? 2.6 : 1.8;
     ctx.beginPath();
@@ -1802,6 +2015,13 @@ function gunScale() {
   return clamp(Math.min(W / 1280, H / 880), 0.55, 1.3);
 }
 
+// The barrel tip in the weapon's own sub-frame, scaled but unrotated: the aim pose
+// uses it to work out where to hold the gun for its muzzle to land on the aim point.
+function gunMuzzleOffset(w) {
+  const s = gunScale();
+  return { x: w.muzzle.x * s, y: w.muzzle.y * s };
+}
+
 function gunTransform() {
   const w = currentGun();
   const aim = aimBlend();
@@ -1809,16 +2029,26 @@ function gunTransform() {
   const swingY = (cross.y - H * 0.5) / H;
   const progress = gun.reloading > 0 ? 1 - gun.reloading / w.reload : 0;
   const reloadDrop = gun.reloading > 0 ? Math.sin(progress * Math.PI) : 0;
-  // hip position, then the sighted-in position the right mouse button blends to
-  const ax = lerp(w.anchorX, w.sightX, aim);
-  const ay = lerp(w.anchorY, w.sightY, aim);
-  const arot = lerp(w.baseRot, w.sightRot, aim);
+  // hip position, then the sighted-in position the right mouse button blends to.
+  // Sighted in, a gun is held straight: square to the world (no cant) with its muzzle
+  // on the point the view is aimed at, so the barrel points where you are aiming.
+  let sx = w.sightX, sy = w.sightY, srot = w.sightRot;
+  if (w.sightLine) {
+    const m = gunMuzzleOffset(w);                 // the barrel tip in the weapon's own frame
+    sx = (W * AIM_REF.x - m.x) / W;
+    sy = (H * AIM_REF.y + SIGHT_DROP - m.y) / H;
+    srot = 0;
+  }
+  const ax = lerp(w.anchorX, sx, aim);
+  const ay = lerp(w.anchorY, sy, aim);
+  const arot = lerp(w.baseRot, srot, aim);
+  const sway = 1 - aim;                           // a hand wobbles; the sights do not
   return {
-    x: W * ax + swingX * W * 0.045 * (1 - aim * 0.6) + Math.sin(game.time * 1.7) * 3.2 * (1 - aim * 0.8),
-    y: H * ay + swingY * H * 0.05 * (1 - aim * 0.6) + gun.recoil * H * w.recoilRise +
-       reloadDrop * H * w.reloadRise + Math.cos(game.time * 2.2) * 2.4 * (1 - aim * 0.8),
-    rot: arot + swingX * 0.2 * (1 - aim * 0.5) + gun.recoil * 0.05 -
-         reloadDrop * w.reloadTilt + Math.sin(game.time * 0.85) * 0.007 * (1 - aim * 0.7),
+    x: W * ax + swingX * W * 0.045 * sway + Math.sin(game.time * 1.7) * 3.2 * sway,
+    y: H * ay + swingY * H * 0.05 * sway + gun.recoil * H * w.recoilRise +
+       reloadDrop * H * w.reloadRise + Math.cos(game.time * 2.2) * 2.4 * sway,
+    rot: arot + swingX * 0.2 * sway + gun.recoil * 0.05 -
+         reloadDrop * w.reloadTilt + Math.sin(game.time * 0.85) * 0.007 * sway,
     reloadDrop: reloadDrop,
     aim: aim
   };
@@ -1828,7 +2058,9 @@ function gunMuzzle() {
   const w = currentGun();
   const t = gunTransform();
   const s = gunScale();
-  const lx = w.muzzle.x * s, ly = w.muzzle.y * s;
+  // a pair of pistols trades hands shot for shot
+  const home = (w.altMuzzle && game.shots % 2 === 1) ? w.altMuzzle : w.muzzle;
+  const lx = home.x * s, ly = home.y * s;
   const cos = Math.cos(t.rot), sin = Math.sin(t.rot);
   return { x: t.x + lx * cos - ly * sin, y: t.y + lx * sin + ly * cos };
 }
@@ -1919,6 +2151,158 @@ function drawShotgun() {
   drawShotgunBody();
   drawShotgunHands();
   ctx.restore();
+}
+
+function drawEnergyPistols() {
+  drawArmsEnergy();
+  const lit = game.charged ? 1 : 0.34;     // unloaded, the coils only smoulder
+  // right hand: barrel up and in toward the crosshair
+  ctx.save();
+  ctx.translate(-140, 30);
+  ctx.scale(0.86, 0.86);
+  ctx.rotate(0.35);
+  drawEnergyBody(lit);
+  ctx.restore();
+  // left hand: mirrored
+  ctx.save();
+  ctx.translate(140, 30);
+  ctx.scale(-0.86, 0.86);
+  ctx.rotate(0.35);
+  drawEnergyBody(lit);
+  ctx.restore();
+}
+
+function drawArmsEnergy() {
+  ctx.lineCap = 'round';
+  // forearms in from both bottom corners, meeting at the grips
+  ctx.strokeStyle = '#5b6244';
+  ctx.lineWidth = 80;
+  ctx.beginPath();
+  ctx.moveTo(-250, 470);
+  ctx.lineTo(-70, -40);
+  ctx.stroke();
+
+  ctx.strokeStyle = '#4e5540';
+  ctx.lineWidth = 80;
+  ctx.beginPath();
+  ctx.moveTo(250, 470);
+  ctx.lineTo(70, -40);
+  ctx.stroke();
+
+  ctx.strokeStyle = 'rgba(0,0,0,0.18)';
+  ctx.lineWidth = 26;
+  ctx.beginPath();
+  ctx.moveTo(-196, 380);
+  ctx.lineTo(-88, 30);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(196, 380);
+  ctx.lineTo(88, 30);
+  ctx.stroke();
+}
+
+function drawEnergyBody(lit) {
+  ctx.lineCap = 'butt';
+  ctx.lineJoin = 'miter';
+  lit = lit === undefined ? 1 : lit;
+
+  // the charge bleeding off the weapon
+  if (lit > 0.4) {
+    const halo = ctx.createRadialGradient(-90, -150, 10, -90, -150, 230);
+    halo.addColorStop(0, 'rgba(120, 230, 255, ' + (0.2 * lit) + ')');
+    halo.addColorStop(1, 'rgba(90, 200, 255, 0)');
+    ctx.fillStyle = halo;
+    ctx.beginPath();
+    ctx.arc(-90, -150, 230, 0, TAU);
+    ctx.fill();
+  }
+
+  // grip
+  ctx.save();
+  ctx.translate(30, -120);
+  ctx.rotate(0.34);
+  const gg = ctx.createLinearGradient(-32, -78, 30, 98);
+  gg.addColorStop(0, '#39424e');
+  gg.addColorStop(1, '#151a21');
+  rrect(-32, -78, 62, 176, 16);
+  ctx.fillStyle = gg;
+  ctx.fill();
+
+  // the cell seated in the grip
+  const cg = ctx.createLinearGradient(0, 8, 0, 78);
+  cg.addColorStop(0, 'rgba(' + Math.round(150 + 90 * lit) + ', 250, 255, ' + (0.35 + 0.6 * lit) + ')');
+  cg.addColorStop(1, 'rgba(50, ' + Math.round(150 + 40 * lit) + ', 235, ' + (0.3 + 0.55 * lit) + ')');
+  rrect(-21, 10, 42, 64, 9);
+  ctx.fillStyle = cg;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(10, 20, 26, 0.5)';
+  ctx.lineWidth = 3;
+  ctx.stroke();
+  rrect(-34, 92, 66, 16, 6);
+  ctx.fillStyle = '#0f1318';
+  ctx.fill();
+  ctx.restore();
+
+  // frame
+  rrect(-196, -206, 238, 30, 8);
+  ctx.fillStyle = '#39424e';
+  ctx.fill();
+
+  // trigger guard + trigger
+  ctx.strokeStyle = '#2c323b';
+  ctx.lineWidth = 12;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(-108, -182);
+  ctx.quadraticCurveTo(-122, -132, -66, -132);
+  ctx.quadraticCurveTo(-30, -132, -26, -170);
+  ctx.stroke();
+  rrect(-86, -178, 14, 40, 6);
+  ctx.fillStyle = '#4a525e';
+  ctx.fill();
+
+  // slide
+  const sg = ctx.createLinearGradient(0, -264, 0, -200);
+  sg.addColorStop(0, '#5d6877');
+  sg.addColorStop(0.45, '#39424e');
+  sg.addColorStop(1, '#222932');
+  rrect(-236, -262, 258, 58, 12);
+  ctx.fillStyle = sg;
+  ctx.fill();
+
+  // the coil groove down the slide, and the coils crossing it
+  ctx.strokeStyle = 'rgba(150, 240, 255, ' + (0.25 + 0.55 * lit) + ')';
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.moveTo(-206, -232);
+  ctx.lineTo(-16, -232);
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(120, 225, 255, ' + (0.12 + 0.45 * lit) + ')';
+  ctx.lineWidth = 3;
+  for (let i = 0; i < 7; i++) {
+    rrect(-198 + i * 26, -254, 12, 42, 5);
+    ctx.stroke();
+  }
+
+  // sights, muzzle, and the lit ring around it
+  rrect(-228, -273, 14, 14, 3);
+  ctx.fillStyle = '#101419';
+  ctx.fill();
+  rrect(-6, -273, 14, 14, 3);
+  ctx.fillStyle = '#101419';
+  ctx.fill();
+  rrect(-246, -247, 18, 28, 6);
+  ctx.fillStyle = '#0c0f14';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(-237, -233, 6.5, 0, TAU);
+  ctx.fillStyle = '#04060a';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(-237, -233, 11, 0, TAU);
+  ctx.strokeStyle = 'rgba(170, 246, 255, ' + (0.25 + 0.6 * lit) + ')';
+  ctx.lineWidth = 3.5;
+  ctx.stroke();
 }
 
 function drawRifleBody() {
@@ -2528,10 +2912,11 @@ function drawMuzzleFlash() {
   const a = clamp(gun.flash, 0, 1);
   const r = (54 + 42 * a) * gunScale() * w.flashScale;
 
+  const bolt = !!w.bolt;
   const g = ctx.createRadialGradient(mx, my, 0, mx, my, r * 1.7);
-  g.addColorStop(0, 'rgba(255, 250, 224, ' + (0.95 * a) + ')');
-  g.addColorStop(0.3, 'rgba(255, 206, 104, ' + (0.55 * a) + ')');
-  g.addColorStop(1, 'rgba(255, 150, 40, 0)');
+  g.addColorStop(0, bolt ? 'rgba(232, 252, 255, ' + (0.95 * a) + ')' : 'rgba(255, 250, 224, ' + (0.95 * a) + ')');
+  g.addColorStop(0.3, bolt ? 'rgba(140, 235, 255, ' + (0.6 * a) + ')' : 'rgba(255, 206, 104, ' + (0.55 * a) + ')');
+  g.addColorStop(1, bolt ? 'rgba(60, 180, 255, 0)' : 'rgba(255, 150, 40, 0)');
   ctx.fillStyle = g;
   ctx.beginPath();
   ctx.arc(mx, my, r * 1.7, 0, TAU);
@@ -2550,7 +2935,7 @@ function drawMuzzleFlash() {
     if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
   }
   ctx.closePath();
-  ctx.fillStyle = 'rgba(255, 246, 206, ' + (0.92 * a) + ')';
+  ctx.fillStyle = bolt ? 'rgba(224, 250, 255, ' + (0.92 * a) + ')' : 'rgba(255, 246, 206, ' + (0.92 * a) + ')';
   ctx.fill();
   ctx.restore();
 }
@@ -2581,6 +2966,8 @@ const els = {
   score: document.getElementById('score'),
   acc: document.getElementById('acc'),
   slices: document.getElementById('sliceStat'),
+  energy: document.getElementById('energyStat'),
+  energyStat: document.getElementById('energyStat'),
   ammo: document.getElementById('ammo'),
   ammoBox: document.getElementById('ammoBox'),
   hpBox: document.getElementById('hpBox'),
@@ -2611,12 +2998,19 @@ function updateHud() {
   setText(els.score, fmt(game.score));
   setText(els.acc, game.shots ? Math.round(accuracy() * 100) + '%' : '—');
   setText(els.slices, String(game.slices));
-  setText(els.ammo, w.melee ? '∞' : (gun.reloading > 0 ? '—' : String(gun.ammo)));
+  const loaded = w.energy === true && game.charged;
+  setText(els.ammo, (w.melee || loaded) ? '∞' : (w.energy ? '0' : (gun.reloading > 0 ? '—' : String(gun.ammo))));
+  setText(els.energy, game.charged ? '∞' : game.energy + ' / ' + ENERGY_MAX);
+  if (els.energyStat) els.energyStat.classList.toggle('charged', game.charged);
   setText(els.gunName, w.name);
   if (els.targetBar) els.targetBar.style.width = (game.targetsNeeded ? clamp(game.targetsDone / game.targetsNeeded, 0, 1) * 100 : 0) + '%';
   if (els.flagBar) els.flagBar.style.width = (game.flagsNeeded ? clamp(game.flagsDone / game.flagsNeeded, 0, 1) * 100 : 0) + '%';
   if (els.enemyBar) els.enemyBar.style.width = (game.enemiesNeeded ? clamp(game.enemiesDone / game.enemiesNeeded, 0, 1) * 100 : 0) + '%';
-  if (els.ammoBox) els.ammoBox.classList.toggle('empty', !w.melee && gun.ammo <= 0 && gun.reloading <= 0);
+  if (els.ammoBox) {
+    els.ammoBox.classList.toggle('energy', w.energy === true);
+    els.ammoBox.classList.toggle('empty', !w.melee && !loaded && gun.ammo <= 0 && gun.reloading <= 0);
+    els.ammoBox.classList.toggle('charged', loaded);
+  }
 
   // health
   const hp = Math.max(0, Math.round(game.hp));
@@ -2849,6 +3243,7 @@ window.__range = {
   startGame: startGame, nextLevel: nextLevel, spawnLevel: spawnLevel,
   startReload: startReload, completeLevel: completeLevel,
   drawGun: drawGun, gunTransform: gunTransform, gunScale: gunScale,
+  gunMuzzleOffset: gunMuzzleOffset, sightDrop: SIGHT_DROP, aimRef: AIM_REF,
   get triggerHeld() { return triggerHeld; },
   focalLength: focalLength, gunMuzzle: gunMuzzle, targetFace: targetFace, flagShape: flagShape,
   entityPoint: function (e) {
@@ -2875,6 +3270,15 @@ window.__range = {
     }
     return best ? best.e : null;
   },
+  // energy pistols: cells, the drop roll and the charge
+  energyMax: ENERGY_MAX, energyDropChance: ENERGY_DROP_CHANCE,
+  get energy() { return game.energy; },
+  get charged() { return game.charged; },
+  get dropChance() { return dropChance; },
+  setDropChance: function (v) { dropChance = v; },
+  energyRoll: energyRoll, dropEnergy: dropEnergy, collectEnergy: collectEnergy,
+  maybeCharge: maybeCharge, energyPistolsOut: energyPistolsOut, needEnergy: needEnergy,
+  drawEnergyCell: drawEnergyCell, drawEnergyPistols: drawEnergyPistols,
   // new-feature hooks for the headless tests
   enemyFace: enemyFace, enemyFire: enemyFire, slash: slash, resolveBullet: resolveBullet,
   useMedKit: useMedKit, tickHeal: tickHeal, updateBullets: updateBullets, hurt: hurt,

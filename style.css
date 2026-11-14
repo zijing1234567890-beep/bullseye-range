@@ -173,6 +173,20 @@ html, body {
 }
 .ammo-box.empty #ammo { color: var(--red); }
 .ammo-box.empty .reload-hint { opacity: 1; }
+/* the energy pistols: no magazine, so they get a charge lamp instead of a reload hint */
+.ammo-box.energy .reload-hint { display: none; }
+.ammo-box .charge-hint {
+  font-size: 11px;
+  color: #7ef0ff;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.ammo-box.charged #ammo { color: #7ef0ff; text-shadow: 0 0 12px rgba(126, 240, 255, 0.55); }
+.ammo-box.charged .charge-hint { opacity: 1; }
+.stat-energy #energyStat { color: #7ef0ff; }
+.stat-energy #energyStat.charged { text-shadow: 0 0 12px rgba(126, 240, 255, 0.6); }
 
 .hints { font-size: 11px; color: var(--dim); }
 
