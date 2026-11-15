@@ -4581,7 +4581,7 @@ window.addEventListener('keydown', e => {
   else if (e.code === 'KeyF') useMedKit();
   else if (e.code === 'KeyP' || e.code === 'Escape') togglePause();
   else if (e.code === 'Space') fire();
-  else if (e.code === 'Enter' && game.state === 'levelclear') nextLevel();
+  else if (e.code === 'Enter' && game.state === 'levelclear') declineOffer();   // Enter = no thanks
   else if (e.code === 'Enter' && game.state === 'down') startGame();
 });
 canvas.addEventListener('wheel', e => {
@@ -4634,9 +4634,6 @@ function step(dt) {
     updateCamera(dt);
   }
   game.hurtFlash = Math.max(0, game.hurtFlash - dt * 1.6);
-  if (game.state === 'levelclear') {
-    // the level-clear card waits for the player to buy or decline
-  }
   updateHud();
 }
 
