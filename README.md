@@ -16,7 +16,7 @@ and it runs.
 | Mouse | aim the crosshair |
 | Left click | fire (hold it down to keep firing) |
 | Right click | aim down the sights — with the katana, raise the guard |
-| `1` – `8` (or the wheel) | AK-47 · pistol · shotgun · katana · energy pistols · sniper · flamethrower · water gun |
+| `1` – `8` (or the wheel) | AK-47 · pistol · shotgun · katana · energy pistols · sniper · flamethrower · fire extinguisher |
 | `F` | med kit (heals 45 hp) |
 | `R` | reload |
 | `A` / `D` | turn |
@@ -32,9 +32,9 @@ and it runs.
 - **Sniper rifle** — 3 cartridge rounds dropped by shooters load it; a scoped shot kicks
   the sights down.
 - **Flamethrower** — burns the knife men before they reach you.
-- **Water gun** — a 70-squirt tank of cold water. It is the only thing that puts the drum
-  fires out (see below), and it soaks a shooter so he cannot draw a bead on you for a
-  couple of seconds.
+- **Fire extinguisher** — a pressurised 90-blast foam extinguisher. It is the only thing
+  that puts the drum fires out (see below), and the blast chokes a shooter so he cannot
+  draw a bead on you for a couple of seconds.
 - **Katana** — no ammo. Cuts shooters down inside 4.6 m, turns their rounds aside while
   the guard is raised (or from the front at any time), and **slices incoming rounds clean
   in two** if you swing while they are on you.
@@ -42,10 +42,11 @@ and it runs.
 ## Fires
 
 Every round there are drum fires burning out in the grass — one to four of them, never
-right in front of you. Nothing else in the rack touches them. Take the water gun
-(`8`) and hold the jet on a drum: each squirt takes a bite out of it, and once it has had
-enough it hisses out for good (120 points, and the HUD's Fires row ticks over). A round is
-not over while a fire is still burning, so put them all out to move on.
+right in front of you. Nothing else in the rack touches them: lead and flame only feed
+them. Take the fire extinguisher (`8`) and hold the blast on a drum: foam breaks over the
+steel with every burst, and once it has had enough it hisses out for good (120 points, and
+the HUD's Fires row ticks over). A round is not over while a fire is still burning, so put
+them all out to move on.
 
 ## Between levels
 

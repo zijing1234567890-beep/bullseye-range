@@ -131,7 +131,7 @@ html, body {
 }
 
 .mission:nth-child(5) .bar > i {
-  background: linear-gradient(90deg, #9fe0ff, #3f9cc4);
+  background: linear-gradient(90deg, #ffcf8a, #e2551f);
 }
 
 .icon {
