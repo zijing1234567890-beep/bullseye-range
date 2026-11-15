@@ -46,6 +46,7 @@
 
     <div class="panel stats">
       <div class="stat"><span class="label">SCORE</span><span id="score">0</span></div>
+      <div class="stat stat-perk hidden" id="perkBadge"><span class="label">PERK</span><span id="perkName">&mdash;</span></div>
       <div class="stat stat-sliced"><span class="label">SLICED</span><span id="sliceStat">0</span></div>
       <div class="stat stat-energy"><span class="label">ENERGY</span><span id="energyStat">0 / 3</span></div>
       <div class="stat stat-rounds"><span class="label">ROUNDS</span><span id="roundStat">0 / 3</span></div>
@@ -105,6 +106,9 @@
         up over the shoulder is the only warning you get. Put them down with anything in the rack, or
         take the <b class="c-gold">flamethrower</b> (key <kbd>7</kbd>): its jet sets whatever it washes
         over alight, and a burning man drops where he stands. A raised katana turns his blade, too.</p>
+      <p>Clear a level and the range offers you one thing from the shop &mdash; a
+        <b class="c-gold">power-up for the next round only</b>, paid for out of your score, or
+        you can wave it away and play the round as you are.</p>
       <p>Hit every quota to move on to the next level. Higher levels add more&mdash;and faster&mdash;
         targets, flags and gunmen. Take a round and your health drops; <kbd>F</kbd> patches
         you up with a med kit. The katana cuts them down if you get close enough, and if you
@@ -119,7 +123,10 @@
         <li><kbd>F</kbd> med kit &middot; <kbd>R</kbd> reload &middot; <kbd>A</kbd><kbd>D</kbd> turn &middot; <kbd>P</kbd> pause</li>
       </ul>
     </div>
-    <button id="ovBtn" class="btn">Start shooting</button>
+    <div class="ov-actions">
+      <button id="ovBtn" class="btn" type="button">Start shooting</button>
+      <button id="ovAlt" class="btn btn-ghost hidden" type="button">No thanks &rarr;</button>
+    </div>
   </div>
 </div>
 

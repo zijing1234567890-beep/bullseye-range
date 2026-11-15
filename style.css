@@ -438,6 +438,44 @@ kbd {
 .btn:hover { filter: brightness(1.07); transform: translateY(-1px); }
 .btn:active { transform: translateY(1px); }
 
+.hidden { display: none !important; }
+
+/* two ways out of the level-clear card */
+.ov-actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; align-items: center; }
+
+.btn-ghost {
+  color: var(--ink, #f2efe6);
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow: none;
+}
+.btn-ghost:hover { background: rgba(255, 255, 255, 0.14); filter: none; }
+
+/* the one thing the range puts up for sale between levels */
+.offer {
+  margin: 14px 0 4px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 203, 71, 0.34);
+  background: linear-gradient(180deg, rgba(255, 203, 71, 0.10), rgba(255, 203, 71, 0.03));
+  text-align: left;
+}
+.offer-tag {
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--gold, #ffcb47);
+  opacity: 0.85;
+}
+.offer-name { display: block; margin: 4px 0 6px; font-size: 19px; letter-spacing: 0.01em; }
+.offer p { margin: 0 0 10px; font-size: 13.5px; line-height: 1.45; opacity: 0.86; }
+.offer-foot { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.offer-price { font-weight: 800; font-size: 16px; color: var(--gold, #ffcb47); font-variant-numeric: tabular-nums; }
+.offer-note { font-size: 12px; opacity: 0.62; font-variant-numeric: tabular-nums; }
+
+.stat-perk { color: var(--gold, #ffcb47); }
+.stat-perk #perkName { font-size: 13px; letter-spacing: 0.02em; }
+
 /* ---------------- error box (debug aid) ---------------- */
 .err {
   position: fixed;

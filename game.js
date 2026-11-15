@@ -592,6 +592,27 @@ const WEAPONS = [
 let gunIndex = 0;
 const currentGun = () => WEAPONS[gunIndex];
 
+/* ---------------- the between-levels shop ---------------- */
+// A perk is one string on `game.perk`, cleared when the round it was bought for
+// ends. Everything it changes is read through these helpers, so nothing has to be
+// undone afterwards.
+const perkOn = (id) => game.perk === id;
+const perkById = (id) => PERKS.find(p => p.id === id) || null;
+const perkPrice = (p) => p.price + (game.level - 1) * PERK_LEVEL_TAX;
+
+function magSize(w) {                     // rounds in a fresh magazine
+  return Math.round(w.mag * (perkOn('bandolier') ? 1.5 : 1));
+}
+
+function reloadTime(w) {                  // seconds a reload takes
+  return w.reload * (perkOn('speedloaders') ? 0.6 : 1);
+}
+
+function rollOffer() {
+  const p = PERKS[randInt(0, PERKS.length - 1)];
+  return { id: p.id, price: perkPrice(p) };
+}
+
 /* ---------------- game state ---------------- */
 
 const MAX_HP = 100;
@@ -630,6 +651,22 @@ const FLAME_BURN = 1.05;          // seconds a body burns before it goes down
 const FLAME_JET = 0.14;           // seconds the visible jet lingers after a squirt
 const FLAME_SCORCH = 60;          // points for burning something down
 
+// Between levels the range keeps a one-round shop: a single power-up is offered,
+// paid for out of the score, and lasts only for the level you are about to play.
+const PERKS = [
+  { id: 'flak', name: 'Flak vest', price: 450,
+    blurb: 'Rounds take half the bite out of you for the whole round.' },
+  { id: 'bandolier', name: 'Bandolier', price: 400,
+    blurb: 'Every magazine in the rack holds half again as much.' },
+  { id: 'speedloaders', name: 'Speed loaders', price: 350,
+    blurb: 'Every reload in the rack takes 40% less time.' },
+  { id: 'fieldkit', name: 'Field kit', price: 300,
+    blurb: 'A full health bar and two extra med kits when the round starts.' },
+  { id: 'coldnerve', name: 'Cold nerve', price: 500,
+    blurb: 'The shooters take far longer to line you up before they fire.' }
+];
+const PERK_LEVEL_TAX = 60;        // each level up adds this much to the asking price
+
 const game = {
   state: 'menu',                 // menu | playing | paused | levelclear | down
   level: 1,
@@ -664,7 +701,8 @@ const game = {
   bullets: [],
   time: 0,
   levelTime: 0,
-  clearTimer: 0,
+  perk: null,                    // the power-up bought for this round, if any
+  offer: null,                   // { id, price } waiting on the level-clear card
   entities: [],
   tracers: [],
   pops: [],
@@ -759,6 +797,10 @@ function spawnLevel(n) {
   game.enemiesDone = 0;
   game.knivesDone = 0;
   game.levelTime = 0;
+  if (perkOn('fieldkit')) {        // the one perk that pays out before the first shot
+    game.hp = MAX_HP;
+    game.medKits += 2;
+  }
 
   const total = tn + 2 + fn + 1 + en + kn;
   const spread = Math.min(Math.PI * 1.24, Math.PI * 0.52 + n * 0.075);
@@ -844,7 +886,7 @@ function spawnLevel(n) {
   game.bullets.length = 0;
   game.sliceT = 0;
   game.guardT = 0;
-  WEAPONS.forEach(w => { w.ammo = w.mag; });    // every weapon starts a level loaded
+  WEAPONS.forEach(w => { w.ammo = magSize(w); }); // every weapon starts a level loaded
   game.energy = 0;                              // cells do not survive the round
   game.charged = false;
   game.rounds = 0;                              // ...and neither do the rounds
@@ -897,7 +939,7 @@ function updateEntities(dt) {
     if (e.state === 'alive' && e.type === 'enemy' && !ablaze) {
       if (e.flash > 0) e.flash = Math.max(0, e.flash - dt * 7);
       if (e.aim > 0) {                               // lining you up, then the shot
-        e.aim += dt / ENEMY_AIM;
+        e.aim += dt / (ENEMY_AIM * (perkOn('coldnerve') ? 1.7 : 1));
         if (e.aim >= 1) { e.aim = 0; e.cool = rand(1.5, 3.0); enemyFire(e); }
       } else {
         e.cool -= dt;
@@ -1337,6 +1379,7 @@ function needRounds() {
 /* ---------------- health & the med kit ---------------- */
 function hurt(n, screenX) {
   if (game.state !== 'playing') return;
+  if (perkOn('flak')) n = Math.max(1, Math.round(n * 0.5));
   game.hp = Math.max(0, game.hp - n);
   game.hurtFlash = 1;
   game.hurtFrom = typeof screenX === 'number' ? screenX : W * 0.5;
@@ -1784,8 +1827,8 @@ function fire() {
 function startReload() {
   const w = currentGun();
   if (game.state !== 'playing') return false;
-  if (gun.reloading > 0 || gun.ammo >= w.mag) return false;
-  gun.reloading = w.reload;
+  if (gun.reloading > 0 || gun.ammo >= magSize(w)) return false;
+  gun.reloading = reloadTime(w);
   Sound.reloadMech();
   updateHud();
   return true;
@@ -1797,7 +1840,7 @@ function tickReload(dt) {
   if (gun.reloading <= 0) {
     const w = currentGun();
     gun.reloading = 0;
-    w.ammo = w.mag;
+    w.ammo = magSize(w);
     Sound.reloadMech();
     updateHud();
   }
@@ -1811,7 +1854,6 @@ function accuracy() {
 function completeLevel() {
   if (game.state !== 'playing') return;
   game.state = 'levelclear';
-  game.clearTimer = 3.0;
 
   const acc = accuracy();
   const clearBonus = 220 + game.level * 60;
@@ -1820,13 +1862,41 @@ function completeLevel() {
   game.score += clearBonus + accBonus + timeBonus;
   game.bestLevel = Math.max(game.bestLevel || 1, game.level + 1);
 
+  // the perk bought for the round that just ended has done its work
+  game.perk = null;
+  game.offer = rollOffer();        // ...and the range puts one thing up for sale
+
   Sound.levelUp();
   showOverlay('levelclear', { clearBonus: clearBonus, accBonus: accBonus, timeBonus: timeBonus, acc: acc });
   updateHud();
 }
 
+// Buy the offered power-up for the round about to start: the score pays for it and
+// the perk is live only until this next level is cleared. Everything else (walking
+// away, not having the points, or the offer running out) leaves the round as it is.
+function buyOffer() {
+  if (game.state !== 'levelclear' || !game.offer) return false;
+  const price = game.offer.price;
+  if (game.score < price) return false;
+  game.score -= price;
+  game.perk = game.offer.id;
+  game.offer = null;
+  Sound.pick();
+  nextLevel();
+  return true;
+}
+
+function declineOffer() {
+  if (game.state !== 'levelclear') return false;
+  game.offer = null;
+  game.perk = null;
+  nextLevel();
+  return true;
+}
+
 function nextLevel() {
   game.level++;
+  game.offer = null;
   spawnLevel(game.level);
   game.state = 'playing';
   hideOverlay();
@@ -1848,6 +1918,8 @@ function startGame() {
   game.lastDeflect = null;
   game.time = 0;
   game.bestLevel = 1;
+  game.perk = null;
+  game.offer = null;
   game.hp = MAX_HP;
   game.medKits = MED_KITS;
   game.healing = 0;
@@ -2778,7 +2850,7 @@ function gunTransform() {
   const aim = aimBlend();
   const swingX = (cross.x - W * 0.5) / W;
   const swingY = (cross.y - H * 0.5) / H;
-  const progress = gun.reloading > 0 ? 1 - gun.reloading / w.reload : 0;
+  const progress = gun.reloading > 0 ? 1 - gun.reloading / reloadTime(w) : 0;
   const reloadDrop = gun.reloading > 0 ? Math.sin(progress * Math.PI) : 0;
   // hip position, then the sighted-in position the right mouse button blends to.
   // Sighted in, a gun is held straight: level (its own pitch taken out), square to
@@ -4280,7 +4352,10 @@ const els = {
   ovTitle: document.getElementById('ovTitle'),
   ovSub: document.getElementById('ovSub'),
   ovBody: document.getElementById('ovBody'),
-  ovBtn: document.getElementById('ovBtn')
+  ovBtn: document.getElementById('ovBtn'),
+  ovAlt: document.getElementById('ovAlt'),
+  perkBadge: document.getElementById('perkBadge'),
+  perkName: document.getElementById('perkName')
 };
 const MENU_HTML = els.ovBody.innerHTML;
 
@@ -4332,6 +4407,12 @@ function updateHud() {
   }
   if (els.medBtn) els.medBtn.disabled = !(game.state === 'playing' && game.medKits > 0 && game.hp < MAX_HP && game.healing <= 0);
 
+  if (els.perkBadge) {
+    const active = game.perk ? perkById(game.perk) : null;
+    els.perkBadge.classList.toggle('hidden', !active);
+    if (active) setText(els.perkName, active.name);
+  }
+
   if (els.gunBar) {
     for (let i = 0; i < els.gunBar.children.length; i++) {
       const chip = els.gunBar.children[i];
@@ -4342,6 +4423,7 @@ function updateHud() {
 
 function showOverlay(mode, data) {
   els.overlay.classList.remove('hidden');
+  if (els.ovAlt && mode !== 'levelclear') els.ovAlt.classList.add('hidden');
   els.overlay.classList.toggle('hidden-chrome', mode !== 'menu');
   if (mode === 'menu') {
     els.ovTitle.textContent = 'Bullseye Range';
@@ -4350,6 +4432,24 @@ function showOverlay(mode, data) {
     els.ovBtn.textContent = 'Start shooting';
     els.ovBtn.dataset.action = 'start';
   } else if (mode === 'levelclear') {
+    const perk = game.offer ? perkById(game.offer.id) : null;
+    const price = game.offer ? game.offer.price : 0;
+    const afford = !!perk && game.score >= price;
+    let offerHtml = '';
+    if (perk) {
+      offerHtml =
+        '<div class="offer">' +
+        '<div class="offer-tag">One round only</div>' +
+        '<b class="offer-name">' + perk.name + '</b>' +
+        '<p>' + perk.blurb + '</p>' +
+        '<div class="offer-foot">' +
+        '<span class="offer-price">' + fmt(price) + ' pts</span>' +
+        '<span class="offer-note">' +
+        (afford ? 'score ' + fmt(game.score) : 'you are ' + fmt(price - game.score) + ' short') +
+        '</span>' +
+        '</div>' +
+        '</div>';
+    }
     els.ovTitle.textContent = 'Level ' + game.level + ' cleared';
     els.ovSub.textContent = game.levelTime.toFixed(1) + 's · ' + Math.round(data.acc * 100) + '% accuracy';
     els.ovBody.innerHTML =
@@ -4358,9 +4458,15 @@ function showOverlay(mode, data) {
       '<div><span>Accuracy bonus</span><b>+' + data.accBonus + '</b></div>' +
       '<div><span>Speed bonus</span><b>+' + data.timeBonus + '</b></div>' +
       '<div class="total"><span>New score</span><b>' + fmt(game.score) + '</b></div>' +
-      '</div>';
-    els.ovBtn.textContent = 'Next level →';
-    els.ovBtn.dataset.action = 'next';
+      '</div>' + offerHtml;
+    els.ovBtn.textContent = afford ? 'Buy for ' + fmt(price) + ' →' : 'Next level →';
+    els.ovBtn.dataset.action = afford ? 'buy' : 'decline';
+    els.ovBtn.disabled = false;
+    if (els.ovAlt) {
+      els.ovAlt.classList.toggle('hidden', !afford);
+      els.ovAlt.textContent = 'No thanks →';
+      els.ovAlt.dataset.action = 'decline';
+    }
   } else if (mode === 'down') {
     els.ovTitle.textContent = 'You are down';
     els.ovSub.textContent = 'Level ' + game.level + ' · ' + data.kills + ' shooter' + (data.kills === 1 ? '' : 's') + ' put down';
@@ -4391,10 +4497,18 @@ function hideOverlay() {
 els.ovBtn.addEventListener('click', function () {
   const action = els.ovBtn.dataset.action;
   if (action === 'start') startGame();
+  else if (action === 'buy') buyOffer();
+  else if (action === 'decline') declineOffer();
   else if (action === 'next') nextLevel();
   else if (action === 'restart') startGame();
   else if (action === 'resume') togglePause();
 });
+
+if (els.ovAlt) {
+  els.ovAlt.addEventListener('click', function () {
+    if (els.ovAlt.dataset.action === 'decline') declineOffer();
+  });
+}
 
 if (els.gunBar) {
   els.gunBar.addEventListener('click', function (e) {
@@ -4521,8 +4635,7 @@ function step(dt) {
   }
   game.hurtFlash = Math.max(0, game.hurtFlash - dt * 1.6);
   if (game.state === 'levelclear') {
-    game.clearTimer -= dt;
-    if (game.clearTimer <= 0) nextLevel();
+    // the level-clear card waits for the player to buy or decline
   }
   updateHud();
 }
@@ -4558,7 +4671,14 @@ window.__range = {
              kick: w.kick, shake: w.shake, ammo: gun.ammo, mag: w.mag };
   },
   startGame: startGame, nextLevel: nextLevel, spawnLevel: spawnLevel,
+  showOverlay: showOverlay, hideOverlay: hideOverlay,
   startReload: startReload, completeLevel: completeLevel,
+  perks: PERKS, perkById: perkById, perkOn: perkOn, magSize: magSize, reloadTime: reloadTime,
+  perkPrice: perkPrice, rollOffer: rollOffer, buyOffer: buyOffer, declineOffer: declineOffer,
+  get perk() { return game.perk; },
+  get offer() { return game.offer; },
+  get magNow() { return magSize(currentGun()); },
+  get reloadNow() { return reloadTime(currentGun()); },
   drawGun: drawGun, gunTransform: gunTransform, gunScale: gunScale,
   gunMuzzleOffset: gunMuzzleOffset, aimRef: AIM_REF,
   gunAimScale: gunAimScale,
