@@ -38,9 +38,11 @@ and it runs.
 
 ## Between levels
 
-Clearing a level puts one thing from the range shop on the clear card — a power-up paid
-for out of your score that lasts for the next round only, or you can wave it away and play
-on as you are:
+Clearing a level lays out three things from the range shop on the clear card and you pick
+one — a power-up paid for out of your score that lasts for the next round only. Click the
+card you want, or wave all three away ("No thanks", or `Enter`) and play on as you are. A
+card you cannot afford is greyed out and says how short you are. The prices climb 60 points
+per level, and the roll is three different items each time.
 
 - **Bandolier** — half again as many rounds in every magazine.
 - **Speedloaders** — reloads take 40% less time.

@@ -451,27 +451,61 @@ kbd {
 }
 .btn-ghost:hover { background: rgba(255, 255, 255, 0.14); filter: none; }
 
-/* the one thing the range puts up for sale between levels */
-.offer {
+/* the three things the range puts up for sale between levels */
+.card.wide { max-width: 800px; }
+
+.offers {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
   margin: 14px 0 4px;
-  padding: 14px 16px;
+  text-align: left;
+}
+
+.offer {
+  display: flex;
+  flex-direction: column;
+  padding: 12px 13px;
   border-radius: 12px;
   border: 1px solid rgba(255, 203, 71, 0.34);
   background: linear-gradient(180deg, rgba(255, 203, 71, 0.10), rgba(255, 203, 71, 0.03));
-  text-align: left;
 }
 .offer-tag {
-  font-size: 10px;
-  letter-spacing: 0.16em;
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--gold, #ffcb47);
   opacity: 0.85;
 }
-.offer-name { display: block; margin: 4px 0 6px; font-size: 19px; letter-spacing: 0.01em; }
-.offer p { margin: 0 0 10px; font-size: 13.5px; line-height: 1.45; opacity: 0.86; }
-.offer-foot { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
-.offer-price { font-weight: 800; font-size: 16px; color: var(--gold, #ffcb47); font-variant-numeric: tabular-nums; }
-.offer-note { font-size: 12px; opacity: 0.62; font-variant-numeric: tabular-nums; }
+.offer-name { display: block; margin: 4px 0 6px; font-size: 16px; line-height: 1.2; }
+.offer p { margin: 0 0 10px; font-size: 12.5px; line-height: 1.4; opacity: 0.86; flex: 1; }
+.offer-buy {
+  width: 100%;
+  margin-top: auto;
+  padding: 9px 10px;
+  font-size: 13.5px;
+  letter-spacing: 0.01em;
+}
+.offer-buy.is-short,
+.offer-buy:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  filter: none;
+  transform: none;
+}
+.offer-note {
+  display: block;
+  margin-top: 6px;
+  text-align: center;
+  font-size: 11px;
+  opacity: 0.62;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 620px) {
+  .offers { grid-template-columns: 1fr; }
+  .card { padding: 20px 18px 18px; }
+}
 
 .stat-perk { color: var(--gold, #ffcb47); }
 .stat-perk #perkName { font-size: 13px; letter-spacing: 0.02em; }

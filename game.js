@@ -608,9 +608,16 @@ function reloadTime(w) {                  // seconds a reload takes
   return w.reload * (perkOn('speedloaders') ? 0.6 : 1);
 }
 
+// Three different things go on the card; the player buys one of them or none.
+const OFFER_COUNT = 3;
 function rollOffer() {
-  const p = PERKS[randInt(0, PERKS.length - 1)];
-  return { id: p.id, price: perkPrice(p) };
+  const pool = PERKS.slice();
+  const out = [];
+  for (let i = 0; i < Math.min(OFFER_COUNT, pool.length); i++) {
+    const p = pool.splice(randInt(0, pool.length - 1), 1)[0];
+    out.push({ id: p.id, price: perkPrice(p) });
+  }
+  return out;
 }
 
 /* ---------------- game state ---------------- */
@@ -1874,12 +1881,13 @@ function completeLevel() {
 // Buy the offered power-up for the round about to start: the score pays for it and
 // the perk is live only until this next level is cleared. Everything else (walking
 // away, not having the points, or the offer running out) leaves the round as it is.
-function buyOffer() {
-  if (game.state !== 'levelclear' || !game.offer) return false;
-  const price = game.offer.price;
-  if (game.score < price) return false;
-  game.score -= price;
-  game.perk = game.offer.id;
+function buyOffer(index) {
+  if (game.state !== 'levelclear' || !Array.isArray(game.offer)) return false;
+  const pick = game.offer[index | 0];
+  if (!pick) return false;
+  if (game.score < pick.price) return false;
+  game.score -= pick.price;
+  game.perk = pick.id;
   game.offer = null;
   Sound.pick();
   nextLevel();
@@ -4354,6 +4362,7 @@ const els = {
   ovBody: document.getElementById('ovBody'),
   ovBtn: document.getElementById('ovBtn'),
   ovAlt: document.getElementById('ovAlt'),
+  card: document.getElementById('ovCard'),
   perkBadge: document.getElementById('perkBadge'),
   perkName: document.getElementById('perkName')
 };
@@ -4423,6 +4432,7 @@ function updateHud() {
 
 function showOverlay(mode, data) {
   els.overlay.classList.remove('hidden');
+  if (els.card) els.card.classList.toggle('wide', mode === 'levelclear');
   if (els.ovAlt && mode !== 'levelclear') els.ovAlt.classList.add('hidden');
   els.overlay.classList.toggle('hidden-chrome', mode !== 'menu');
   if (mode === 'menu') {
@@ -4432,24 +4442,28 @@ function showOverlay(mode, data) {
     els.ovBtn.textContent = 'Start shooting';
     els.ovBtn.dataset.action = 'start';
   } else if (mode === 'levelclear') {
-    const perk = game.offer ? perkById(game.offer.id) : null;
-    const price = game.offer ? game.offer.price : 0;
-    const afford = !!perk && game.score >= price;
-    let offerHtml = '';
-    if (perk) {
-      offerHtml =
+    const offers = Array.isArray(game.offer) ? game.offer : [];
+    let anyAfford = false;
+    let cards = '';
+    offers.forEach(function (o, i) {
+      const perk = perkById(o.id);
+      if (!perk) return;
+      const afford = game.score >= o.price;
+      anyAfford = anyAfford || afford;
+      cards +=
         '<div class="offer">' +
         '<div class="offer-tag">One round only</div>' +
         '<b class="offer-name">' + perk.name + '</b>' +
         '<p>' + perk.blurb + '</p>' +
-        '<div class="offer-foot">' +
-        '<span class="offer-price">' + fmt(price) + ' pts</span>' +
+        '<button class="btn offer-buy' + (afford ? '' : ' is-short') + '" type="button"' +
+        ' data-buy="' + i + '"' + (afford ? '' : ' disabled') + '>' +
+        (afford ? 'Buy &middot; ' + fmt(o.price) : fmt(o.price) + ' pts') +
+        '</button>' +
         '<span class="offer-note">' +
-        (afford ? 'score ' + fmt(game.score) : 'you are ' + fmt(price - game.score) + ' short') +
+        (afford ? 'you have ' + fmt(game.score) : 'you are ' + fmt(o.price - game.score) + ' short') +
         '</span>' +
-        '</div>' +
         '</div>';
-    }
+    });
     els.ovTitle.textContent = 'Level ' + game.level + ' cleared';
     els.ovSub.textContent = game.levelTime.toFixed(1) + 's · ' + Math.round(data.acc * 100) + '% accuracy';
     els.ovBody.innerHTML =
@@ -4458,15 +4472,11 @@ function showOverlay(mode, data) {
       '<div><span>Accuracy bonus</span><b>+' + data.accBonus + '</b></div>' +
       '<div><span>Speed bonus</span><b>+' + data.timeBonus + '</b></div>' +
       '<div class="total"><span>New score</span><b>' + fmt(game.score) + '</b></div>' +
-      '</div>' + offerHtml;
-    els.ovBtn.textContent = afford ? 'Buy for ' + fmt(price) + ' →' : 'Next level →';
-    els.ovBtn.dataset.action = afford ? 'buy' : 'decline';
+      '</div>' + (cards ? '<div class="offers">' + cards + '</div>' : '');
+    els.ovBtn.textContent = anyAfford ? 'No thanks →' : 'Next level →';
+    els.ovBtn.dataset.action = 'decline';
     els.ovBtn.disabled = false;
-    if (els.ovAlt) {
-      els.ovAlt.classList.toggle('hidden', !afford);
-      els.ovAlt.textContent = 'No thanks →';
-      els.ovAlt.dataset.action = 'decline';
-    }
+    if (els.ovAlt) els.ovAlt.classList.add('hidden');
   } else if (mode === 'down') {
     els.ovTitle.textContent = 'You are down';
     els.ovSub.textContent = 'Level ' + game.level + ' · ' + data.kills + ' shooter' + (data.kills === 1 ? '' : 's') + ' put down';
@@ -4502,6 +4512,11 @@ els.ovBtn.addEventListener('click', function () {
   else if (action === 'next') nextLevel();
   else if (action === 'restart') startGame();
   else if (action === 'resume') togglePause();
+});
+
+els.ovBody.addEventListener('click', function (e) {
+  const btn = e.target.closest('[data-buy]');
+  if (btn && !btn.disabled) buyOffer(parseInt(btn.dataset.buy, 10));
 });
 
 if (els.ovAlt) {
