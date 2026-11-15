@@ -377,6 +377,36 @@ const Sound = (function () {
     roar.start(t); roar.stop(t + 0.5);
   }
 
+  function splash() {                     // the tank squirts: a wet hiss off the nozzle
+    if (!ensure()) return;
+    const t = ac.currentTime;
+    const src = noise(0.22);
+    const hp = ac.createBiquadFilter();
+    hp.type = 'highpass'; hp.frequency.value = 1300;
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.13, t);
+    g.gain.exponentialRampToValueAtTime(0.0008, t + 0.17);
+    src.connect(hp); hp.connect(g); g.connect(master);
+    src.start(t); src.stop(t + 0.2);
+  }
+
+  function hiss() {                       // a fire drowning: a long wash of steam
+    if (!ensure()) return;
+    const t = ac.currentTime;
+    const src = noise(0.7);
+    const bp = ac.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(3200, t);
+    bp.frequency.exponentialRampToValueAtTime(560, t + 0.6);
+    bp.Q.value = 0.7;
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.0008, t);
+    g.gain.exponentialRampToValueAtTime(0.26, t + 0.04);
+    g.gain.exponentialRampToValueAtTime(0.0008, t + 0.66);
+    src.connect(bp); bp.connect(g); g.connect(master);
+    src.start(t); src.stop(t + 0.7);
+  }
+
   function burn() {                       // something catching light: a crackling hiss
     if (!ensure()) return;
     const t = ac.currentTime;
@@ -414,7 +444,8 @@ const Sound = (function () {
 
   return {
     ensure, shot, boom, pick, hit, flagHit, emptyClick, reloadMech, levelUp, gameStart,
-    enemyShot, deflect, slice, slash, hurt, heal, zap, pickup, load, crack, flame, burn, knife
+    enemyShot, deflect, slice, slash, hurt, heal, zap, pickup, load, crack, flame, burn, knife,
+    splash, hiss
   };
 })();
 
@@ -587,6 +618,22 @@ const WEAPONS = [
     recoilRise: 0.02, reloadRise: 0.30, reloadTilt: 0.32,
     muzzle: { x: -219, y: -286 },              // = rotate(-360, -6) by RIFLE_ANGLE
     draw: drawFlamethrower, sound: 'flame', ammo: 260
+  },
+  {
+    // Water, not lead: the tank carries a long dousing, and the jet is the only thing
+    // that puts out the drum fires on the range. It also soaks a shooter's powder, so
+    // his aim runs out while he is wet.
+    id: 'water', name: 'Water gun', key: '8', code: 'Digit8',
+    water: true, mag: 70, reload: 2.2, interval: 0.06,
+    pellets: 1, spread: 0,
+    recoil: 0.16, kick: 0.0006, shake: 0.16,
+    flashScale: 0, flashSpikes: 0,
+    anchorX: 0.62, anchorY: 0.95, baseRot: -0.32,
+    sightLine: true,                           // right-click squares the nozzle on the aim point
+    tilt: RIFLE_ANGLE,
+    recoilRise: 0.015, reloadRise: 0.28, reloadTilt: 0.30,
+    muzzle: { x: -252, y: -246 },
+    draw: drawWaterGun, sound: 'splash', ammo: 70
   }
 ];
 let gunIndex = 0;
@@ -656,6 +703,15 @@ const FLAME_RANGE = 15;           // metres the jet carries
 const FLAME_TOL = 0.55;           // how far off the crosshair a body still catches
 const FLAME_BURN = 1.05;          // seconds a body burns before it goes down
 const FLAME_JET = 0.14;           // seconds the visible jet lingers after a squirt
+
+// The water gun works like the jet, but cold: it carries as far, soaks a shooter's
+// powder instead of setting him alight, and is the only thing that puts a drum fire out.
+const WATER_RANGE = 17;            // metres the jet of water carries
+const WATER_TOL = 0.62;            // how far off the crosshair a fire still catches
+const WATER_JET = 0.11;            // seconds the visible jet lingers after a squirt
+const FIRE_DOSE = 0.055;           // how much of a fire one squirt puts down
+const FIRE_SCORE = 120;            // points for putting one out
+const SOAK_TIME = 2.4;             // seconds a soaked shooter is off his aim
 const FLAME_SCORCH = 60;          // points for burning something down
 
 // Between levels the range keeps a one-round shop: a single power-up is offered,
@@ -710,6 +766,9 @@ const game = {
   levelTime: 0,
   perk: null,                    // the power-up bought for this round, if any
   offer: null,                   // { id, price } waiting on the level-clear card
+  fires: [],                     // drum fires on the range: { x, z, state, douse }
+  firesNeeded: 0,
+  firesDone: 0,
   entities: [],
   tracers: [],
   pops: [],
@@ -721,6 +780,8 @@ const gun = {
   recoil: 0, flash: 0, reloading: 0, aim: 0,   // aim: 0 hip -> 1 down the sights
   flameT: 0,                    // seconds the last squirt of fire is still visible
   flameSeed: -10,               // when the jet last roared, so it does not roar every squirt
+  waterT: 0,                    // seconds the last squirt of water is still visible
+  waterSeed: -10,               // ...and when it last hissed
   // the round count always belongs to the weapon in hand, so switching keeps it
   get ammo() { return WEAPONS[gunIndex].ammo; },
   set ammo(v) { WEAPONS[gunIndex].ammo = v; }
@@ -845,7 +906,7 @@ function spawnLevel(n) {
         state: 'alive', t: 0, drop: 0, alpha: 1,
         swayAmp: rand(0.5, 1.5), swaySpeed: rand(0.45, 0.9), wob: rand(0, TAU),
         cool: rand(1.0, 2.4), aim: 0, flash: 0,
-        burn: 0, burnFrom: 0, ember: rand(0, TAU),
+        burn: 0, burnFrom: 0, wet: 0, ember: rand(0, TAU),
         jacket: randInt(0, 3)
       });
       return;
@@ -858,7 +919,7 @@ function spawnLevel(n) {
         state: 'alive', t: 0, drop: 0, alpha: 1,
         speed: rand(KNIFE_SPEED[0], KNIFE_SPEED[1]),
         stride: rand(0, TAU), swing: 0, cool: rand(0.5, 1.4),
-        burn: 0, burnFrom: 0, ember: rand(0, TAU),
+        burn: 0, burnFrom: 0, wet: 0, ember: rand(0, TAU),
         jacket: randInt(0, 3)
       });
       return;
@@ -873,7 +934,7 @@ function spawnLevel(n) {
         swayAmp: moving ? rand(1.4, 2.8) : 0,
         swaySpeed: rand(0.7, 1.5),
         wob: rand(0, TAU),
-        burn: 0, burnFrom: 0, ember: rand(0, TAU)
+        burn: 0, burnFrom: 0, wet: 0, ember: rand(0, TAU)
       });
     } else {
       ents.push({
@@ -881,12 +942,36 @@ function spawnLevel(n) {
         poleH: rand(3.5, 4.8), w: rand(1.35, 1.95), h: rand(0.85, 1.25),
         hue: (n * 47 + randInt(0, 30)) % 360,
         state: 'alive', t: 0, lowered: 0, alpha: 1,
-        burn: 0, burnFrom: 0, ember: rand(0, TAU)
+        burn: 0, burnFrom: 0, wet: 0, ember: rand(0, TAU)
       });
     }
   });
 
   game.entities = ents;
+
+  // Drum fires, out on the grass: nothing but the water gun puts them out, and the
+  // round is not over until they are all down.
+  game.fires = [];
+  const fr = Math.min(4, 1 + Math.ceil(n / 2));
+  let tries = 0;
+  while (game.fires.length < fr && tries++ < 240) {
+    const a = rand(-spread / 2, spread / 2) * 1.2;
+    const r = rand(Math.max(9, minR - 4), maxR + 4);
+    const fx = Math.sin(a) * r, fz = Math.cos(a) * r;
+    if (fz < 6) continue;                                        // never in your lap
+    let clear = true;
+    for (let i = 0; i < game.fires.length; i++) {
+      if (Math.hypot(game.fires[i].x - fx, game.fires[i].z - fz) < 5) { clear = false; break; }
+    }
+    if (!clear) continue;
+    game.fires.push({
+      type: 'fire', x: fx, z: fz, hx: fx, hz: fz,
+      state: 'burning', douse: 0, outAt: 0, t: rand(0, 6), seed: rand(0, TAU)
+    });
+  }
+  game.firesNeeded = game.fires.length;
+  game.firesDone = 0;
+
   game.tracers.length = 0;
   game.pops.length = 0;
   game.sparks.length = 0;
@@ -902,6 +987,7 @@ function spawnLevel(n) {
   needRoundHintAt = -10;
   gun.reloading = 0;
   gun.flameT = 0;
+  gun.waterT = 0;
   cam.yaw = 0;
   cam.pitch = 0;
   cross.x = W * 0.5;
@@ -945,7 +1031,11 @@ function updateEntities(dt) {
     const ablaze = e.burn > 0;                       // alight: he stops fighting, and flails
     if (e.state === 'alive' && e.type === 'enemy' && !ablaze) {
       if (e.flash > 0) e.flash = Math.max(0, e.flash - dt * 7);
-      if (e.aim > 0) {                               // lining you up, then the shot
+      if (e.wet > 0) e.wet = Math.max(0, e.wet - dt);
+      if (e.aim > 0 && e.wet > 0) {                  // soaked: his sights come off you
+        e.aim = Math.max(0, e.aim - dt * 1.6);
+        if (e.aim === 0) e.cool = Math.max(e.cool, 0.9);
+      } else if (e.aim > 0) {                        // lining you up, then the shot
         e.aim += dt / (ENEMY_AIM * (perkOn('coldnerve') ? 1.7 : 1));
         if (e.aim >= 1) { e.aim = 0; e.cool = rand(1.5, 3.0); enemyFire(e); }
       } else {
@@ -1556,7 +1646,7 @@ function flameDistance(e) {
 
 // Everything in front of the nozzle, inside the jet's reach, close enough to the
 // crosshair to catch: nearest first, so the near man takes the fire.
-function flameTargets() {
+function coneTargets(reach, tol) {
   const found = [];
   for (let i = 0; i < game.entities.length; i++) {
     const e = game.entities[i];
@@ -1564,15 +1654,17 @@ function flameTargets() {
     if (e.type === 'energy' || e.type === 'round') continue;
     const x = e.type === 'flag' ? e.x : e.hx, z = e.type === 'flag' ? e.z : e.hz;
     const d = depthOf(x, z);
-    if (!(d > 0.3) || d > FLAME_RANGE) continue;
+    if (!(d > 0.3) || d > reach) continue;
     const a = entityAnchor(e);
     if (!a) continue;
-    if (flameDistance(e) > FLAME_TOL * a.k) continue;   // the cone widens with distance
+    if (flameDistance(e) > tol * a.k) continue;         // the cone widens with distance
     found.push({ e: e, d: d, a: a });
   }
   found.sort(function (p, q) { return p.d - q.d; });
   return found;
 }
+
+function flameTargets() { return coneTargets(FLAME_RANGE, FLAME_TOL); }
 
 // A body the jet has touched: it is alight now, and burns down where it stands.
 function ignite(e) {
@@ -1601,6 +1693,75 @@ function sprayFlame() {
   burst(cross.x, cross.y, '#ffb03a', 3, 190);
   if (!caught.length) burst(cross.x, cross.y, '#c8ccd4', 1, 120);
   return fresh;
+}
+
+/* ---------------- the water gun ---------------- */
+// Where a drum fire stands on screen, and how much of it the jet has to cover.
+function fireAnchor(f) {
+  const p = project(f.x, 0, f.z);
+  if (!p) return null;
+  return { x: p.x, y: p.y, k: p.k, rad: Math.max(9, p.k * 0.62) };
+}
+
+// The lit fires the jet can reach, nearest first.
+function fireTargets() {
+  const found = [];
+  for (let i = 0; i < game.fires.length; i++) {
+    const f = game.fires[i];
+    if (f.state !== 'burning') continue;
+    const d = depthOf(f.x, f.z);
+    if (!(d > 0.3) || d > WATER_RANGE) continue;
+    const a = fireAnchor(f);
+    if (!a) continue;
+    // measured against the flames, which stand above the drum
+    const dy = cross.y - (a.y - a.k * 0.5);
+    if (Math.hypot(cross.x - a.x, dy) > a.rad + WATER_TOL * a.k * 0.55) continue;
+    found.push({ f: f, d: d, a: a });
+  }
+  found.sort(function (p, q) { return p.d - q.d; });
+  return found;
+}
+
+// Water on a fire: it takes a good few squirts, and then it is out for good.
+function douse(f, a) {
+  if (!f || f.state !== 'burning') return false;
+  f.douse = Math.min(1, f.douse + FIRE_DOSE);
+  if (f.douse < 1) return false;
+  f.state = 'out';
+  f.outAt = game.time;
+  game.firesDone++;
+  game.score += FIRE_SCORE;
+  const x = a ? a.x : cross.x, y = a ? a.y - a.k * 0.5 : cross.y;
+  burst(x, y, '#dfeaf4', 30, 280);
+  burst(x, y, '#9fd4ee', 18, 210);
+  game.pops.push({ x: x, y: y, text: 'OUT +' + FIRE_SCORE, life: 1.0, max: 1.0, color: '#bfe8ff' });
+  Sound.hiss();
+  maybeComplete();
+  return true;
+}
+
+// One squirt: the nearest fire under the crosshair goes down a little, and a shooter
+// in the jet comes away soaked, his powder too wet to aim.
+function sprayWater() {
+  let any = false;
+  const fires = fireTargets();
+  if (fires.length) any = douse(fires[0].f, fires[0].a) || true;
+
+  const caught = coneTargets(WATER_RANGE, WATER_TOL);
+  for (let i = 0; i < caught.length; i++) {
+    const e = caught[i].e;
+    if (e.type !== 'enemy' && e.type !== 'knife') continue;
+    if (e.wet === undefined) e.wet = 0;
+    if (e.wet < SOAK_TIME) {
+      const a = caught[i].a;
+      burst(a.x, a.y, '#cfe9ff', 2, 130);
+    }
+    e.wet = SOAK_TIME;
+    any = true;
+    break;                                     // the near body takes the wash
+  }
+  if (!any) burst(cross.x, cross.y, '#bcd8ea', 1, 110);
+  return any;
 }
 
 /* ---------------- effects ---------------- */
@@ -1688,7 +1849,8 @@ function maybeComplete() {
   if (game.targetsDone >= game.targetsNeeded &&
       game.flagsDone >= game.flagsNeeded &&
       game.enemiesDone >= game.enemiesNeeded &&
-      game.knivesDone >= game.knivesNeeded) completeLevel();
+      game.knivesDone >= game.knivesNeeded &&
+      game.firesDone >= game.firesNeeded) completeLevel();
 }
 
 /* ---------------- the katana ---------------- */
@@ -1771,6 +1933,15 @@ function fire() {
   cam.pitch += w.kick * (1 - aimBlend() * 0.35);   // braced against the shoulder: less climb
   cam.shake = w.shake;
   game.shots++;
+
+  if (w.water) {                           // water, not rounds: one squirt of the jet
+    gun.flash = 0;                         // no muzzle star: the jet draws its own root
+    gun.waterT = WATER_JET;                // ...and the water hangs there between squirts
+    if (game.time - gun.waterSeed > 0.28) { gun.waterSeed = game.time; Sound.splash(); }
+    if (sprayWater()) game.hits++;
+    updateHud();
+    return;
+  }
 
   if (w.flame) {                           // fuel, not rounds: one squirt of the jet
     gun.flash = 0;                         // no muzzle star: the jet draws its own root
@@ -2492,6 +2663,158 @@ function drawBurn(e) {
   ctx.restore();
 }
 
+function drawFire(f) {
+  const p = project(f.x, 0, f.z);
+  if (!p || !isFinite(p.x) || !isFinite(p.y) || !isFinite(p.k)) return;
+  const k = p.k;
+  const bw = Math.max(8, k * 0.58);              // drum half-width
+  const bh = Math.max(9, k * 0.92);              // ...and its height
+  const t = game.time + f.t;
+  const burning = f.state === 'burning';
+  const since = burning ? 0 : game.time - f.outAt;
+
+  ctx.save();
+
+  // scorched ring of grass under the drum
+  ctx.fillStyle = 'rgba(24,18,12,0.30)';
+  ctx.beginPath();
+  ctx.ellipse(p.x, p.y, bw * 1.7, bw * 0.6, 0, 0, TAU);
+  ctx.fill();
+
+  // fuel drum: banded steel, warm with soot while it burns
+  const drum = ctx.createLinearGradient(p.x - bw, 0, p.x + bw, 0);
+  drum.addColorStop(0, '#241f1b');
+  drum.addColorStop(0.36, burning ? '#5d4a38' : '#4a4742');
+  drum.addColorStop(0.64, burning ? '#4a3728' : '#3b3a36');
+  drum.addColorStop(1, '#1d1a17');
+  rrect(p.x - bw, p.y - bh, bw * 2, bh, Math.max(2.5, bw * 0.18));
+  ctx.fillStyle = drum;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+  ctx.lineWidth = Math.max(1, bw * 0.08);
+  for (let i = 1; i <= 2; i++) {
+    ctx.beginPath();
+    ctx.moveTo(p.x - bw, p.y - bh + (bh * i) / 3);
+    ctx.lineTo(p.x + bw, p.y - bh + (bh * i) / 3);
+    ctx.stroke();
+  }
+  ctx.fillStyle = burning ? '#2c2118' : '#2a2a27';
+  ctx.beginPath();
+  ctx.ellipse(p.x, p.y - bh, bw, Math.max(2, bw * 0.26), 0, 0, TAU);
+  ctx.fill();
+
+  if (!burning) {
+    // put out: steam off the hot steel, thinner every second, and a wet sheen
+    const fade = clamp(1 - since / 3.4, 0, 1);
+    if (fade > 0.01) {
+      ctx.globalAlpha = fade * 0.5;
+      ctx.fillStyle = '#dfe8ef';
+      for (let i = 0; i < 4; i++) {
+        const q = (t * 0.45 + i * 0.25) % 1;
+        const sx = p.x + Math.sin(t * 1.3 + i * 2.1) * bw * 0.5;
+        ctx.beginPath();
+        ctx.ellipse(sx, p.y - bh - q * k * 1.5, bw * (0.3 + q * 0.55), bw * (0.22 + q * 0.4), 0, 0, TAU);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+    ctx.fillStyle = 'rgba(150,200,235,0.20)';
+    rrect(p.x - bw, p.y - bh, bw * 2, bh, Math.max(2.5, bw * 0.18));
+    ctx.fill();
+    ctx.restore();
+    return;
+  }
+
+  // the light it throws on the grass
+  ctx.globalCompositeOperation = 'lighter';
+  const glow = ctx.createRadialGradient(p.x, p.y - bh * 0.8, 0, p.x, p.y - bh * 0.8, bw * 3.4);
+  glow.addColorStop(0, 'rgba(255,150,60,0.34)');
+  glow.addColorStop(0.5, 'rgba(255,110,30,0.13)');
+  glow.addColorStop(1, 'rgba(255,90,20,0)');
+  ctx.fillStyle = glow;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y - bh * 0.8, bw * 3.4, 0, TAU);
+  ctx.fill();
+
+  // the fire itself: tongues climbing off the open lid
+  const tall = k * (1.35 + 0.18 * Math.sin(t * 3.1));
+  const grad = ctx.createLinearGradient(0, p.y - bh, 0, p.y - bh - tall);
+  grad.addColorStop(0, 'rgba(255,226,150,0.95)');
+  grad.addColorStop(0.38, 'rgba(255,142,48,0.8)');
+  grad.addColorStop(1, 'rgba(206,44,16,0)');
+  const baseY = p.y - bh * 0.85;
+  for (let i = 0; i < 6; i++) {
+    const off = (i - 2.5) * bw * 0.3 + Math.sin(t * 4.5 + f.seed + i * 1.3) * bw * 0.16;
+    const h = tall * (0.55 + 0.45 * Math.sin(t * 5.2 + f.seed + i * 1.9));
+    const w = bw * (0.42 + 0.16 * (i % 3));
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(p.x + off - w, baseY);
+    ctx.quadraticCurveTo(p.x + off - w * 0.55, baseY - h * 0.62,
+      p.x + off + Math.sin(t * 3.4 + i) * w * 0.8, baseY - h);
+    ctx.quadraticCurveTo(p.x + off + w * 0.6, baseY - h * 0.5, p.x + off + w, baseY);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // a hot core right at the lid
+  ctx.fillStyle = 'rgba(255,248,214,0.55)';
+  ctx.beginPath();
+  ctx.ellipse(p.x, baseY, bw * 0.72, Math.max(2, bw * 0.34), 0, 0, TAU);
+  ctx.fill();
+
+  // embers climbing away
+  for (let i = 0; i < 7; i++) {
+    const q = (t * 0.55 + i * 0.143) % 1;
+    const ex = p.x + Math.sin(t * 2.4 + f.seed + i * 2.7) * bw * (0.4 + q * 1.5);
+    const ey = baseY - q * tall * 1.5;
+    ctx.fillStyle = 'rgba(255,' + Math.round(200 - q * 110) + ',90,' + (0.75 * (1 - q)).toFixed(3) + ')';
+    ctx.beginPath();
+    ctx.arc(ex, ey, Math.max(0.8, bw * 0.07 * (1 - q * 0.6)), 0, TAU);
+    ctx.fill();
+  }
+  ctx.globalCompositeOperation = 'source-over';
+
+  // smoke drifting off the top, dark and slow
+  ctx.globalAlpha = 0.2;
+  ctx.fillStyle = '#2f2b28';
+  for (let i = 0; i < 5; i++) {
+    const q = ((t * 0.22 + i * 0.2) % 1);
+    const sx = p.x + Math.sin(t * 0.9 + f.seed + i) * bw * 1.1 + q * bw * 1.4;
+    const sy = baseY - tall * (0.9 + q * 1.5);
+    ctx.beginPath();
+    ctx.ellipse(sx, sy, bw * (0.5 + q * 0.9), bw * (0.4 + q * 0.7), 0, 0, TAU);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+// A soaked man: his jacket glistens and the drips run off him.
+function drawSoak(e) {
+  if (!(e.wet > 0)) return;
+  if (e.type !== 'enemy' && e.type !== 'knife') return;
+  const f = enemyFace(e);
+  if (!f || !isFinite(f.x) || !isFinite(f.k)) return;
+  const a = clamp(e.wet / SOAK_TIME, 0, 1);
+  ctx.save();
+  ctx.globalAlpha = 0.22 * (0.5 + a * 0.5);
+  ctx.fillStyle = '#8fd0f2';
+  ctx.beginPath();
+  ctx.ellipse(f.x, (f.top + f.bot) * 0.52, f.halfW * 0.72, (f.bot - f.top) * 0.36, 0, 0, TAU);
+  ctx.fill();
+  ctx.globalAlpha = 0.5 * a;
+  ctx.fillStyle = '#cdeeff';
+  for (let i = 0; i < 3; i++) {
+    const q = (game.time * 1.6 + i * 0.33) % 1;
+    const dx = f.x + (i - 1) * f.halfW * 0.5;
+    const dy = f.top + (f.bot - f.top) * (0.55 + q * 0.4);
+    ctx.beginPath();
+    ctx.ellipse(dx, dy, Math.max(1, f.k * 0.02), Math.max(1.6, f.k * 0.045), 0, 0, TAU);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
 function drawEnergyCell(e) {
   const p = project(e.x, e.y, e.z);
   if (!p || !isFinite(p.x) || !isFinite(p.y) || !isFinite(p.k)) return;
@@ -2587,6 +2910,11 @@ function drawEntities() {
     const d = depthOf(x, z);
     if (d > 0.5) list.push({ e: e, d: d });
   }
+  for (let i = 0; i < game.fires.length; i++) {
+    const f = game.fires[i];
+    const d = depthOf(f.x, f.z);
+    if (d > 0.5) list.push({ e: f, d: d });
+  }
   list.sort((a, b) => b.d - a.d);
   for (let i = 0; i < list.length; i++) {
     const e = list[i].e;
@@ -2595,8 +2923,10 @@ function drawEntities() {
     else if (e.type === 'knife') drawKnife(e);
     else if (e.type === 'energy') drawEnergyCell(e);
     else if (e.type === 'round') drawRound(e);
+    else if (e.type === 'fire') drawFire(e);
     else drawFlag(e);
     drawBurn(e);
+    drawSoak(e);
   }
 }
 
@@ -2749,6 +3079,7 @@ function render() {
 
   drawGun();
   drawFlameJet();               // the jet leaves the nozzle toward the crosshair
+  drawWaterJet();               // ...and so does the water
   drawCrosshair();
   drawScope();                  // a scoped rifle closes the view down to a sight picture
   drawVignette();
@@ -3882,6 +4213,255 @@ function drawShotgunHands() {
    the upper left of the frame. The right mouse button brings it to the guard. */
 /* The flamethrower: a fuel tank slung under the receiver, a hose running forward
    to a fat heat-shielded tube, and a flared bell mouth with a pilot flame on it. */
+/* ---------------- the water gun in your hands ---------------- */
+function drawWaterGun() {
+  const w = currentGun();
+  drawArms();
+  ctx.save();
+  ctx.rotate(gunPitch(w));               // sighted in: the nozzle comes up level
+  drawWaterGunBody();
+  ctx.restore();
+}
+
+function drawWaterGunBody() {
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+
+  // ---- stock, moulded, tucked back under the arm ----
+  const stock = ctx.createLinearGradient(0, -40, 0, 40);
+  stock.addColorStop(0, '#2f6d8e');
+  stock.addColorStop(1, '#123448');
+  ctx.fillStyle = stock;
+  ctx.beginPath();
+  ctx.moveTo(60, -34);
+  ctx.lineTo(178, -18);
+  ctx.quadraticCurveTo(196, 6, 176, 34);
+  ctx.lineTo(66, 30);
+  ctx.closePath();
+  ctx.fill();
+
+  // ---- pistol grip and trigger ----
+  ctx.save();
+  ctx.translate(10, -6);
+  ctx.rotate(0.30);
+  ctx.fillStyle = '#123a4e';
+  rrect(-30, -10, 62, 150, 18);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.10)';
+  rrect(-20, 8, 14, 108, 7);
+  ctx.fill();
+  ctx.restore();
+
+  ctx.strokeStyle = '#0e2c3c';
+  ctx.lineWidth = 11;
+  ctx.beginPath();
+  ctx.moveTo(-44, -44);
+  ctx.quadraticCurveTo(-58, 8, -6, 10);
+  ctx.quadraticCurveTo(32, 12, 40, -26);
+  ctx.stroke();
+  ctx.fillStyle = '#2a6a86';
+  rrect(-28, -40, 12, 38, 6);
+  ctx.fill();
+
+  // ---- receiver: chunky, wet-looking plastic ----
+  const body = ctx.createLinearGradient(0, -104, 0, 24);
+  body.addColorStop(0, '#57b8dd');
+  body.addColorStop(0.42, '#2f8fba');
+  body.addColorStop(1, '#154c67');
+  rrect(-176, -100, 246, 116, 26);
+  ctx.fillStyle = body;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(4,26,38,0.45)';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(-160, -46);
+  ctx.lineTo(46, -52);
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,0.22)';        // a gloss running the length of it
+  rrect(-158, -90, 200, 16, 8);
+  ctx.fill();
+
+  // ---- pressure gauge on the side of the receiver ----
+  ctx.fillStyle = '#e9f4fa';
+  ctx.beginPath();
+  ctx.arc(-30, -34, 21, 0, TAU);
+  ctx.fill();
+  ctx.strokeStyle = '#0d3b52';
+  ctx.lineWidth = 4;
+  ctx.stroke();
+  ctx.strokeStyle = '#e15b3c';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(-30, -34);
+  ctx.lineTo(-18, -48);
+  ctx.stroke();
+
+  // ---- the tank riding the top: water sloshing inside ----
+  const tank = ctx.createLinearGradient(0, -212, 0, -110);
+  tank.addColorStop(0, '#c9ecfb');
+  tank.addColorStop(0.45, '#8fd3f0');
+  tank.addColorStop(1, '#3f9cc4');
+  rrect(-150, -206, 232, 92, 40);
+  ctx.fillStyle = tank;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(10,52,72,0.35)';
+  ctx.lineWidth = 3;
+  ctx.stroke();
+
+  const slosh = Math.sin(game.time * 1.7) * 5;
+  const lvl = -172 + slosh;                        // water line in the tank
+  ctx.save();
+  rrect(-150, -206, 232, 92, 40);
+  ctx.clip();
+  ctx.fillStyle = 'rgba(255,255,255,0.42)';
+  ctx.beginPath();
+  ctx.moveTo(-160, lvl + 6);
+  for (let i = 0; i <= 8; i++) {
+    ctx.lineTo(-150 + i * 29, lvl + Math.sin(game.time * 3 + i * 0.9) * 4);
+  }
+  ctx.lineTo(90, -110);
+  ctx.lineTo(-160, -110);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  rrect(-132, -196, 26, 66, 13);
+  ctx.fill();
+  ctx.restore();
+
+  // filler cap
+  ctx.fillStyle = '#1d5b78';
+  rrect(-96, -228, 62, 26, 9);
+  ctx.fill();
+  ctx.fillStyle = '#e8a33c';
+  rrect(-88, -224, 20, 16, 5);
+  ctx.fill();
+
+  // ---- the barrel tube, stepping down toward the nozzle ----
+  const tube = ctx.createLinearGradient(0, -84, 0, -30);
+  tube.addColorStop(0, '#9fe0f5');
+  tube.addColorStop(1, '#236b8c');
+  rrect(-262, -82, 116, 42, 18);
+  ctx.fillStyle = tube;
+  ctx.fill();
+  ctx.fillStyle = '#1b5570';
+  rrect(-292, -90, 44, 54, 16);
+  ctx.fill();
+  ctx.fillStyle = '#0e3346';
+  rrect(-302, -78, 26, 40, 10);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(190,235,255,0.75)';        // a bead of water on the lip
+  ctx.beginPath();
+  ctx.ellipse(-300, -64, 5, 7, 0, 0, TAU);
+  ctx.fill();
+
+  // ---- pump handle under the barrel: the thing you slide to build pressure ----
+  ctx.fillStyle = '#17556f';
+  rrect(-190, -18, 78, 40, 14);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.14)';
+  rrect(-184, -10, 66, 10, 5);
+  ctx.fill();
+
+  // ---- left hand under the pump ----
+  drawWaterGunHands();
+}
+
+function drawWaterGunHands() {
+  const skin = ctx.createLinearGradient(0, -40, 0, 40);
+  skin.addColorStop(0, '#e8b491');
+  skin.addColorStop(1, '#b9825f');
+  // the support hand wraps the pump
+  ctx.fillStyle = skin;
+  rrect(-198, 6, 94, 62, 26);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(80,40,24,0.35)';
+  ctx.lineWidth = 3;
+  for (let i = 0; i < 4; i++) {
+    ctx.beginPath();
+    ctx.moveTo(-186 + i * 20, 12);
+    ctx.lineTo(-184 + i * 20, 60);
+    ctx.stroke();
+  }
+  // trigger hand, up on the grip
+  ctx.save();
+  ctx.translate(26, -104);
+  ctx.rotate(0.16);
+  ctx.fillStyle = skin;
+  rrect(-40, -18, 74, 92, 24);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(80,40,24,0.32)';
+  ctx.lineWidth = 3;
+  for (let i = 0; i < 3; i++) {
+    ctx.beginPath();
+    ctx.moveTo(-30, -2 + i * 24);
+    ctx.lineTo(22, -8 + i * 24);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/* ---------------- the jet of water ---------------- */
+function drawWaterJet() {
+  if (!(gun.waterT > 0)) return;
+  const w = currentGun();
+  if (!w.water) return;
+  const m = gunMuzzle();
+  const a = clamp(gun.waterT / WATER_JET, 0, 1);
+  const tx = cross.x, ty = cross.y;
+  const dx = tx - m.x, dy = ty - m.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len, uy = dy / len;
+  const px = -uy, py = ux;
+  const t = game.time;
+  const wob = (q) => Math.sin(t * 26 + q * 9) * q * 7 * a;
+
+  ctx.save();
+  ctx.globalAlpha = 0.55 + a * 0.45;
+  ctx.globalCompositeOperation = 'lighter';
+
+  // three tapering ribbons: a fat misty one, the body of water, and a bright core
+  const strands = [
+    { w0: 6, w1: 26, col: 'rgba(96,178,225,0.24)' },
+    { w0: 4, w1: 14, col: 'rgba(168,220,248,0.32)' },
+    { w0: 1.8, w1: 5, col: 'rgba(255,255,255,0.42)' }
+  ];
+  const cx = (m.x + tx) * 0.5 + px * wob(0.4);
+  const cy = (m.y + ty) * 0.5 + py * wob(0.4) - 22;       // the stream sags a little in flight
+  for (const s of strands) {
+    ctx.fillStyle = s.col;
+    ctx.beginPath();
+    ctx.moveTo(m.x + px * s.w0, m.y + py * s.w0);
+    ctx.quadraticCurveTo(cx + px * s.w1, cy + py * s.w1, tx, ty);
+    ctx.quadraticCurveTo(cx - px * s.w1, cy - py * s.w1, m.x - px * s.w0, m.y - py * s.w0);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // droplets shaken off the stream, falling away
+  ctx.fillStyle = 'rgba(198,234,255,0.55)';
+  for (let i = 0; i < 12; i++) {
+    const q = ((t * 2.2 + i * 0.083) % 1);
+    const x = m.x + (tx - m.x) * q + px * wob(q);
+    const y = m.y + (ty - m.y) * q + py * wob(q) + q * q * 70;
+    ctx.beginPath();
+    ctx.ellipse(x, y, 1.6 + q * 1.4, 2.4 + q * 2, 0, 0, TAU);
+    ctx.fill();
+  }
+
+  // where it lands: a burst of spray
+  const r = 20 + Math.sin(t * 15) * 4;
+  const splash = ctx.createRadialGradient(tx, ty, 0, tx, ty, r * a + 4);
+  splash.addColorStop(0, 'rgba(230,246,255,0.5)');
+  splash.addColorStop(0.55, 'rgba(150,208,240,0.22)');
+  splash.addColorStop(1, 'rgba(120,190,230,0)');
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = splash;
+  ctx.beginPath();
+  ctx.arc(tx, ty, r * a + 4, 0, TAU);
+  ctx.fill();
+  ctx.restore();
+}
+
 function drawFlamethrower() {
   const w = currentGun();
   drawArms();
@@ -4336,10 +4916,12 @@ const els = {
   flagProg: document.getElementById('flagProg'),
   enemyProg: document.getElementById('enemyProg'),
   knifeProg: document.getElementById('knifeProg'),
+  fireProg: document.getElementById('fireProg'),
   targetBar: document.getElementById('targetBar'),
   flagBar: document.getElementById('flagBar'),
   enemyBar: document.getElementById('enemyBar'),
   knifeBar: document.getElementById('knifeBar'),
+  fireBar: document.getElementById('fireBar'),
   score: document.getElementById('score'),
   acc: document.getElementById('acc'),
   slices: document.getElementById('sliceStat'),
@@ -4379,6 +4961,7 @@ function updateHud() {
   setText(els.flagProg, game.flagsDone + ' / ' + game.flagsNeeded);
   setText(els.enemyProg, game.enemiesDone + ' / ' + game.enemiesNeeded);
   setText(els.knifeProg, game.knivesDone + ' / ' + game.knivesNeeded);
+  setText(els.fireProg, game.firesDone + ' / ' + game.firesNeeded);
   setText(els.score, fmt(game.score));
   setText(els.acc, game.shots ? Math.round(accuracy() * 100) + '%' : '—');
   setText(els.slices, String(game.slices));
@@ -4398,6 +4981,7 @@ function updateHud() {
   if (els.flagBar) els.flagBar.style.width = (game.flagsNeeded ? clamp(game.flagsDone / game.flagsNeeded, 0, 1) * 100 : 0) + '%';
   if (els.enemyBar) els.enemyBar.style.width = (game.enemiesNeeded ? clamp(game.enemiesDone / game.enemiesNeeded, 0, 1) * 100 : 0) + '%';
   if (els.knifeBar) els.knifeBar.style.width = (game.knivesNeeded ? clamp(game.knivesDone / game.knivesNeeded, 0, 1) * 100 : 0) + '%';
+  if (els.fireBar) els.fireBar.style.width = (game.firesNeeded ? clamp(game.firesDone / game.firesNeeded, 0, 1) * 100 : 0) + '%';
   if (els.ammoBox) {
     els.ammoBox.classList.toggle('energy', w.energy === true);
     els.ammoBox.classList.toggle('sniper', w.sniper === true);
@@ -4639,6 +5223,7 @@ function step(dt) {
     gun.recoil = Math.max(0, gun.recoil - dt * 4.2);
     gun.flash = Math.max(0, gun.flash - dt * 9);
     gun.flameT = Math.max(0, gun.flameT - dt);      // the jet fades once you let go
+    gun.waterT = Math.max(0, gun.waterT - dt);
     game.sliceT = Math.max(0, game.sliceT - dt);     // the swing stops being live
     game.guardT = Math.max(0, game.guardT - dt);     // ...and so does the tapped guard
     // the sights come up and down at a steady speed; a katana tap holds them up,
@@ -4696,6 +5281,16 @@ window.__range = {
   gunAimScale: gunAimScale,
   get sightDrop() { return SIGHT_DROP; },
   gunPitch: gunPitch, gunTilt: function () { return currentGun().tilt || 0; },
+  get fires() { return game.fires; },
+  get firesNeeded() { return game.firesNeeded; },
+  get firesDone() { return game.firesDone; },
+  fireAnchor: fireAnchor, fireTargets: fireTargets, douse: douse, sprayWater: sprayWater,
+  coneTargets: coneTargets,
+  get waterRange() { return WATER_RANGE; },
+  get fireDose() { return FIRE_DOSE; },
+  get fireScore() { return FIRE_SCORE; },
+  get soakTime() { return SOAK_TIME; },
+  drawFire: drawFire, drawWaterGun: drawWaterGun, drawWaterJet: drawWaterJet,
   armWrist: armWrist,
   aimBlend: aimBlend,
   get triggerHeld() { return triggerHeld; },
@@ -4792,7 +5387,7 @@ window.__range = {
       h: 1.74, r: 0.38, state: 'alive', t: 0, drop: 0, alpha: 1,
       speed: opts.speed === undefined ? KNIFE_SPEED[0] : opts.speed,
       stride: 0, swing: 0, cool: opts.cool === undefined ? 0 : opts.cool,
-      burn: 0, burnFrom: 0, ember: rand(0, TAU), jacket: randInt(0, 3)
+      burn: 0, burnFrom: 0, wet: 0, ember: rand(0, TAU), jacket: randInt(0, 3)
     };
     e.hx = e.x; e.hz = e.z;
     game.entities.push(e);

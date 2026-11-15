@@ -1,8 +1,8 @@
 # Bullseye Range
 
 A first-person shooting gallery you play in the browser: knock the targets down, drop the
-flags, and put down the armed shooters who fire back. Clear every quota to move on to the
-next level.
+flags, put down the armed shooters who fire back, and douse the drum fires burning out on
+the range. Clear every quota to move on to the next level.
 
 **Play it:** https://zijing1234567890-beep.github.io/bullseye-range/
 
@@ -16,7 +16,7 @@ and it runs.
 | Mouse | aim the crosshair |
 | Left click | fire (hold it down to keep firing) |
 | Right click | aim down the sights — with the katana, raise the guard |
-| `1` – `7` (or the wheel) | AK-47 · pistol · shotgun · katana · energy pistols · sniper · flamethrower |
+| `1` – `8` (or the wheel) | AK-47 · pistol · shotgun · katana · energy pistols · sniper · flamethrower · water gun |
 | `F` | med kit (heals 45 hp) |
 | `R` | reload |
 | `A` / `D` | turn |
@@ -32,9 +32,20 @@ and it runs.
 - **Sniper rifle** — 3 cartridge rounds dropped by shooters load it; a scoped shot kicks
   the sights down.
 - **Flamethrower** — burns the knife men before they reach you.
+- **Water gun** — a 70-squirt tank of cold water. It is the only thing that puts the drum
+  fires out (see below), and it soaks a shooter so he cannot draw a bead on you for a
+  couple of seconds.
 - **Katana** — no ammo. Cuts shooters down inside 4.6 m, turns their rounds aside while
   the guard is raised (or from the front at any time), and **slices incoming rounds clean
   in two** if you swing while they are on you.
+
+## Fires
+
+Every round there are drum fires burning out in the grass — one to four of them, never
+right in front of you. Nothing else in the rack touches them. Take the water gun
+(`8`) and hold the jet on a drum: each squirt takes a bite out of it, and once it has had
+enough it hisses out for good (120 points, and the HUD's Fires row ticks over). A round is
+not over while a fire is still burning, so put them all out to move on.
 
 ## Between levels
 

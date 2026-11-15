@@ -130,6 +130,10 @@ html, body {
   background: linear-gradient(90deg, #dbe3ec, #8b97a6);
 }
 
+.mission:nth-child(5) .bar > i {
+  background: linear-gradient(90deg, #9fe0ff, #3f9cc4);
+}
+
 .icon {
   width: 14px; height: 14px;
   border-radius: 50%;
@@ -154,6 +158,16 @@ html, body {
     radial-gradient(circle at 50% 26%, #f0c9a4 0 26%, rgba(0, 0, 0, 0) 27%),
     linear-gradient(180deg, rgba(0, 0, 0, 0) 44%, #6c7a8c 45% 100%);
   box-shadow: 0 0 0 1px rgba(255, 209, 102, 0.5) inset;
+}
+
+/* a drum fire: a flame shape over dark steel */
+.icon-fire {
+  border-radius: 2px 2px 6px 6px;
+  background:
+    radial-gradient(circle at 50% 78%, #ffe9a8 0 22%, rgba(0, 0, 0, 0) 23%),
+    linear-gradient(180deg, #ffb347 0 30%, #ff7a2f 55%, #d2401c 100%);
+  clip-path: polygon(50% 0, 68% 26%, 84% 22%, 96% 52%, 84% 84%, 50% 100%, 16% 84%, 4% 52%, 18% 26%, 32% 30%);
+  box-shadow: 0 0 0 1px rgba(255, 160, 80, 0.35) inset;
 }
 
 .icon-knife {

@@ -42,6 +42,12 @@
         <span class="mcount" id="knifeProg">0 / 0</span>
         <span class="bar"><i id="knifeBar"></i></span>
       </div>
+      <div class="mission">
+        <span class="icon icon-fire" aria-hidden="true"></span>
+        <span class="mname">Fires</span>
+        <span class="mcount" id="fireProg">0 / 0</span>
+        <span class="bar"><i id="fireBar"></i></span>
+      </div>
     </div>
 
     <div class="panel stats">
@@ -65,6 +71,7 @@
         <button class="gun-chip" type="button" data-gun="energy"><b>5</b> Energy pistols</button>
         <button class="gun-chip" type="button" data-gun="sniper"><b>6</b> Sniper</button>
         <button class="gun-chip" type="button" data-gun="flame"><b>7</b> Flamethrower</button>
+        <button class="gun-chip" type="button" data-gun="water"><b>8</b> Water gun</button>
       </div>
     </div>
 
@@ -81,7 +88,7 @@
       <span class="reload-hint" id="reloadHint">press R</span>
       <span class="charge-hint" id="chargeHint">charged</span>
     </div>
-    <div class="panel hints">Left click fires &middot; right click aims (the sniper raises a scope) &middot; with the katana, right click sends their bullets back at them and swinging slices them &middot; the flamethrower burns whatever the jet touches &middot; 1&ndash;7 (or wheel) switch gun &middot; F med kit &middot; R reloads &middot; A / D turn &middot; P pause</div>
+    <div class="panel hints">Left click fires &middot; right click aims (the sniper raises a scope) &middot; with the katana, right click sends their bullets back at them and swinging slices them &middot; the flamethrower burns whatever the jet touches &middot; the water gun douses drum fires &middot; 1&ndash;8 (or wheel) switch gun &middot; F med kit &middot; R reloads &middot; A / D turn &middot; P pause</div>
   </div>
 </div>
 
@@ -90,8 +97,8 @@
     <h1 id="ovTitle">Bullseye Range</h1>
     <p class="sub" id="ovSub">A first-person shooting gallery</p>
     <div id="ovBody">
-      <p>You are the shooter on the range, with a rack of guns, a katana and a
-        flamethrower. Knock the
+      <p>You are the shooter on the range, with a rack of guns, a katana, a flamethrower
+        and a water gun. Knock the
         <b class="c-red">targets</b> down, drop the <b class="c-blue">flags</b>, and put down the
         <b class="c-red">shooters</b> who fire back at you, and the men with knives who walk at you.</p>
       <p>Drop a <b class="c-red">shooter</b> and he may leave a glowing <b class="c-blue">energy
@@ -106,6 +113,12 @@
         up over the shoulder is the only warning you get. Put them down with anything in the rack, or
         take the <b class="c-gold">flamethrower</b> (key <kbd>7</kbd>): its jet sets whatever it washes
         over alight, and a burning man drops where he stands. A raised katana turns his blade, too.</p>
+      <p>Out on the range <b class="c-gold">drum fires</b> are burning in the grass, and nothing in
+        the rack will put them out &mdash; lead and flame only feed them. Take the
+        <b class="c-blue">water gun</b> (key <kbd>8</kbd>) and hold the jet on a drum until it hisses
+        out. A round is not over while a fire is still burning, so douse every one of them. The jet
+        also soaks a <b class="c-red">shooter</b>: dripping wet he cannot draw a bead on you for a
+        moment, which is often the moment you need.</p>
       <p>Clear a level and the range lays out <b class="c-gold">three power-ups</b> and buys you
         one of them &mdash; <b class="c-gold">for the next round only</b>, paid for out of your
         score. Click the one you want, or wave all three away and play the round as
