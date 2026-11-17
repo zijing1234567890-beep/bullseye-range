@@ -56,8 +56,15 @@ round cannot end. The HUD has a Relighters row for them; kill them with anything
 and the flamethrower deals with them like it deals with everyone else. Levels carry one of
 them at first and two from level four on.
 
-A round is not over while a fire is still burning, so put
-them all out to move on.
+Put one of them down and **the man with the tank** comes for you: two red cylinders on his
+back, a rubber apron, a mask and a nozzle held two-handed. He appears out past the drum his
+mate fell by and only starts walking then — and he walks *slowly* (under 1.2 m/s), so you
+have time to see him coming. Let him get within six metres and he stops and hoses you with
+burning fuel for 10-17 damage a wash. He brings one mate at most; foam from the
+extinguisher holds him up and puts his pilot light out. He is a man like the rest otherwise:
+any gun or the flamethrower puts him down, and he counts toward no quota.
+
+A round is not over while a fire is still burning, so put them all out to move on.
 
 ## Between levels
 

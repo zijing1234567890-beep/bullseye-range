@@ -700,6 +700,14 @@ const RELIGHT_SPEED = [1.9, 2.7]; // metres a second, hurrying to a drum that ha
 const RELIGHT_REACH = 2.4;        // ...and where he kneels to set it going again
 const RELIGHT_TIME = 2.0;         // seconds of coaxing before the drum catches light again
 const RELIGHT_MAX = 2;            // no more fire-setters on the range at once than this
+// Put a fire-setter down and the man who tends the drums with him comes for you: slow,
+// heavy, and carrying a tank. He only starts walking when his mate goes down.
+const TORCH_SPEED = [0.8, 1.15];  // metres a second: the tank is heavy and he is in no hurry
+const TORCH_RANGE = 6.0;          // how close he walks before the jet can reach you
+const TORCH_WINDUP = 1.0;         // the pilot light flares for this long before the wash
+const TORCH_DAMAGE = [10, 17];    // what one wash costs you
+const TORCH_COOLDOWN = [1.5, 2.3];
+const TORCH_MAX = 2;              // he brings a mate at most
 
 // The flamethrower: fuel in a canister rather than rounds, and a jet that sets
 // whatever it washes over alight. A body burns for a moment before it drops.
@@ -1021,9 +1029,11 @@ function spawnLevel(n) {
 }
 
 /* ---------------- entity simulation ---------------- */
-// Every walking man on the range: the shooters, the knife men and the fire-setters.
+// Every walking man on the range: the shooters, the knife men, the fire-setters and the
+// men with the tanks who come for you once a fire-setter goes down.
 function isMan(e) {
-  return e.type === 'enemy' || e.type === 'knife' || e.type === 'relight';
+  return e.type === 'enemy' || e.type === 'knife' || e.type === 'relight' ||
+    e.type === 'torcher';
 }
 
 function updateEntities(dt) {
@@ -1131,10 +1141,51 @@ function updateEntities(dt) {
         }
       }
     }
+    if (e.state === 'alive' && e.type === 'torcher' && !ablaze) {
+      // He walks at you slowly and stops a jet's length away: no line to hold, nothing to
+      // slice. Foam from the extinguisher holds him up and puts his pilot light out.
+      if (e.choke > 0) {
+        e.choke = Math.max(0, e.choke - dt);
+        e.swing = 0;
+        e.cool = Math.max(e.cool, 0.8);            // he cannot light the jet with foam in his face
+      }
+      const dx = cam.x - e.x, dz = cam.z - e.z;
+      const d = Math.hypot(dx, dz) || 0.001;
+      if (e.swing > 0) {                            // the pilot light flares, then the wash
+        e.swing += dt / TORCH_WINDUP;
+        if (e.swing >= 1) {
+          e.swing = 0;
+          e.cool = rand(TORCH_COOLDOWN[0], TORCH_COOLDOWN[1]);
+          if (d <= TORCH_RANGE + 1.4 && game.state === 'playing') {
+            const p = project(e.hx, 1.05, e.hz);
+            if (guarding()) {                       // the raised katana turns the flame aside
+              burst(p ? p.x : W * 0.5, p ? p.y : H * 0.5, '#ffd9a0', 16, 260);
+              game.deflects++;
+              Sound.deflect();
+            } else {
+              hurt(randInt(TORCH_DAMAGE[0], TORCH_DAMAGE[1]), p ? p.x : W * 0.5);
+              burst(p ? p.x : W * 0.5, p ? p.y : H * 0.5, '#ff8a3a', 22, 300);
+            }
+          }
+        }
+      } else if (e.choke > 0) {
+        // wiping the foam out of his eyes: he neither walks nor burns
+      } else if (d > TORCH_RANGE) {
+        const step = Math.min(d - TORCH_RANGE, e.speed * dt);
+        e.x += (dx / d) * step;
+        e.z += (dz / d) * step;
+        e.stride += dt * (3.0 + e.speed * 1.4);
+      } else {
+        e.cool -= dt;
+        if (e.cool <= 0) { e.swing = 0.0001; Sound.flame(); }
+      }
+      e.hx = e.x; e.hz = e.z;
+      e.jet = e.swing > 0 ? clamp(e.swing, 0, 1) : Math.max(0, (e.jet || 0) - dt * 3.2);
+    }
     if (e.state === 'alive' && e.burn > 0) {         // set alight by the flamethrower
       e.burn += dt;
       e.swing = 0; e.aim = 0;                        // fire puts the fight out of them
-      if (e.type === 'knife') e.stride += dt * 9;    // thrashing about
+      if (e.type === 'knife' || e.type === 'torcher') e.stride += dt * 9; // thrashing about
       if (e.burn >= FLAME_BURN) scorch(e);
     }
     if (e.state === 'dying') {
@@ -1825,6 +1876,39 @@ function relightFire(f) {
   updateHud();
 }
 
+// The man who tends the drums with him. He is not on the range while a fire-setter is
+// alive: put one down and this one appears out past the drum his mate fell by, and starts
+// walking in. Slow, because the tank is heavy, and he brings a mate at most.
+function spawnTorcher(opts) {
+  opts = opts || {};
+  const a = opts.angle === undefined ? rand(0, TAU) : opts.angle;
+  const d = opts.dist === undefined ? rand(18, 26) : opts.dist;
+  const e = {
+    type: 'torcher', x: cam.x + Math.sin(a) * d, z: cam.z + Math.cos(a) * d,
+    h: 1.8, r: 0.44, state: 'alive', t: 0, drop: 0, alpha: 1,
+    speed: opts.speed === undefined ? rand(TORCH_SPEED[0], TORCH_SPEED[1]) : opts.speed,
+    stride: rand(0, TAU), swing: 0, jet: 0,
+    cool: opts.cool === undefined ? rand(0.8, 1.6) : opts.cool,
+    burn: 0, burnFrom: 0, choke: 0, ember: rand(0, TAU), jacket: randInt(0, 3)
+  };
+  e.hx = e.x; e.hz = e.z;
+  game.entities.push(e);
+  return e;
+}
+
+function summonTorchers(from) {
+  const alive = game.entities.filter(function (e) {
+    return e.type === 'torcher' && e.state === 'alive';
+  }).length;
+  if (alive >= TORCH_MAX) return null;
+  const fall = Math.hypot(from.hx - cam.x, from.hz - cam.z);
+  const a = Math.atan2(from.hx - cam.x, from.hz - cam.z) + rand(-0.5, 0.5);
+  const e = spawnTorcher({ angle: a, dist: clamp(fall + rand(7, 11), 17, 30) });
+  game.pops.push({ x: e.x, y: 1.95, z: e.z, text: 'TORCHER INCOMING', life: 1.8, max: 1.8, color: '#ff8a5c' });
+  Sound.flame();
+  return e;
+}
+
 // One squirt: the nearest fire under the crosshair goes down a little, and a shooter
 // in the blast comes away coughing foam, his aim gone for a moment.
 function sprayFoam() {
@@ -1887,7 +1971,10 @@ function applyHit(found) {
   if (isMan(e)) {                                   // a man, not a target: he stays down for good
     if (e.type === 'enemy') game.enemiesDone++;
     else if (e.type === 'knife') game.knivesDone++;
-    else game.relightsDone++;
+    else if (e.type === 'relight') {
+      game.relightsDone++;
+      summonTorchers(e);                          // his mate with the tank comes for you now
+    }
     game.kills++;
     const head = !!found.hit.head;
     const pts = (head ? 250 : 150) + (found.flame ? FLAME_SCORCH : 0);
@@ -2821,6 +2908,148 @@ function drawRelighter(e) {
   ctx.globalAlpha = 1;
 }
 
+// The man with the tank: put a fire-setter down and this one walks in from out past the
+// drum, slow and heavy, and stops a jet's length away. Two cylinders on his back, a rubber
+// apron, a mask, and a nozzle held two-handed.
+function drawTorcher(e) {
+  const f = enemyFace(e);
+  if (!f) return;
+  const k = f.k;
+  const live = e.state === 'alive';
+  const step = Math.sin(e.stride);
+  const jet = live ? clamp(e.jet || 0, 0, 1) : 0;
+
+  ctx.save();
+  ctx.globalAlpha = e.alpha;
+  ctx.translate(f.x, f.bot);
+  if (e.drop > 0) ctx.rotate(e.drop * 1.15);
+
+  ctx.fillStyle = 'rgba(40, 34, 26, 0.42)';
+  ctx.beginPath();
+  ctx.ellipse(0, 0, k * 0.5, k * 0.12, 0, 0, TAU);
+  ctx.fill();
+
+  // legs, heavy and slow
+  ctx.fillStyle = '#333a42';
+  ctx.save();
+  ctx.translate(-0.14 * k, -0.9 * k);
+  ctx.rotate(step * (live ? 0.18 : 0));
+  rrect(-0.11 * k, 0, 0.22 * k, 0.88 * k, 0.06 * k); ctx.fill();
+  ctx.fillStyle = '#1e2228';
+  rrect(-0.15 * k, 0.82 * k, 0.3 * k, 0.08 * k, 0.03 * k); ctx.fill();
+  ctx.restore();
+  ctx.save();
+  ctx.translate(0.14 * k, -0.9 * k);
+  ctx.rotate(-step * (live ? 0.18 : 0));
+  ctx.fillStyle = '#333a42';
+  rrect(-0.11 * k, 0, 0.22 * k, 0.88 * k, 0.06 * k); ctx.fill();
+  ctx.fillStyle = '#1e2228';
+  rrect(-0.15 * k, 0.82 * k, 0.3 * k, 0.08 * k, 0.03 * k); ctx.fill();
+  ctx.restore();
+
+  // the tanks, slung over both shoulders
+  const tank = function (dx, hue) {
+    ctx.fillStyle = hue;
+    rrect(dx - 0.11 * k, -1.72 * k, 0.22 * k, 0.62 * k, 0.09 * k); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.16)';
+    rrect(dx - 0.07 * k, -1.66 * k, 0.05 * k, 0.44 * k, 0.025 * k); ctx.fill();
+    ctx.fillStyle = '#8f2f22';
+    rrect(dx - 0.05 * k, -1.8 * k, 0.1 * k, 0.1 * k, 0.03 * k); ctx.fill();
+  };
+  tank(-0.34 * k, '#a0392b');
+  tank(0.34 * k, '#8f3326');
+
+  // rubber apron over a heavy jacket
+  ctx.fillStyle = '#4a3f35';
+  rrect(-0.3 * k, -1.62 * k, 0.6 * k, 0.76 * k, 0.1 * k); ctx.fill();
+  ctx.fillStyle = '#2b2f34';
+  rrect(-0.22 * k, -1.44 * k, 0.44 * k, 0.5 * k, 0.06 * k); ctx.fill();
+  // hose looping from the tank to the nozzle
+  ctx.strokeStyle = '#1f2328';
+  ctx.lineWidth = Math.max(2, k * 0.07);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(0.28 * k, -1.5 * k);
+  ctx.quadraticCurveTo(0.44 * k, -1.2 * k, 0.2 * k, -1.05 * k);
+  ctx.stroke();
+
+  // head, respirator mask
+  ctx.fillStyle = SKIN_B;
+  ctx.beginPath();
+  ctx.arc(0, -1.74 * k, 0.135 * k, 0, TAU);
+  ctx.fill();
+  ctx.fillStyle = '#3d4248';
+  ctx.beginPath();
+  ctx.arc(0, -1.78 * k, 0.16 * k, Math.PI * 0.86, Math.PI * 2.14);
+  ctx.fill();
+  ctx.fillStyle = '#5a6169';                    // the mask over his face
+  rrect(-0.11 * k, -1.76 * k, 0.22 * k, 0.12 * k, 0.05 * k); ctx.fill();
+
+  // both arms on the nozzle, out in front of him
+  const nx = 0.06 * k, ny = -1.08 * k;
+  ctx.strokeStyle = '#4a3f35';
+  ctx.lineWidth = Math.max(2.5, k * 0.11);
+  ctx.beginPath();
+  ctx.moveTo(-0.24 * k, -1.46 * k);
+  ctx.quadraticCurveTo(-0.1 * k, -1.24 * k, nx, ny);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(0.24 * k, -1.46 * k);
+  ctx.quadraticCurveTo(0.16 * k, -1.2 * k, nx, ny);
+  ctx.stroke();
+
+  // the nozzle and its pilot light
+  ctx.fillStyle = '#2a2f35';
+  rrect(nx - 0.05 * k, ny - 0.05 * k, 0.1 * k, 0.16 * k, 0.03 * k); ctx.fill();
+  if (live) {
+    const pilot = 0.3 + 0.7 * jet + Math.sin(game.time * 17 + e.ember) * 0.06;
+    ctx.globalCompositeOperation = 'lighter';
+    const g = ctx.createRadialGradient(nx, ny - 0.05 * k, 0, nx, ny - 0.05 * k, k * 0.26 * pilot);
+    g.addColorStop(0, 'rgba(255,248,214,0.95)');
+    g.addColorStop(0.4, 'rgba(255,160,56,0.7)');
+    g.addColorStop(1, 'rgba(255,110,30,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(nx, ny - 0.05 * k, k * 0.26 * pilot, 0, TAU);
+    ctx.fill();
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  // the wash itself: a cone of burning fuel that widens as it comes at you
+  if (jet > 0.02) {
+    const lx = W * 0.5 - f.x;                     // screen centre, in this local space
+    const ly = H * 1.02 - f.bot;
+    const flare = 0.55 + 0.45 * jet;
+    const wob = Math.sin(game.time * 15 + e.ember) * 0.05;
+    const reach = 0.3 + 0.7 * jet;
+    const farX = nx + (lx - nx) * reach, farY = ny + (ly - ny) * reach;
+    const nw = k * 0.055, fw = k * 0.66 * flare;
+    const midX = nx + (farX - nx) * 0.45, midY = ny + (farY - ny) * 0.5;
+    const cone = function (wNear, wFar, fill) {
+      ctx.fillStyle = fill;
+      ctx.beginPath();
+      ctx.moveTo(nx - wNear, ny);
+      ctx.quadraticCurveTo(midX - wFar * 0.5 + wob * k, midY, farX - wFar, farY);
+      ctx.quadraticCurveTo(farX, farY + wFar * 0.35, farX + wFar, farY);
+      ctx.quadraticCurveTo(midX + wFar * 0.5 + wob * k, midY, nx + wNear, ny);
+      ctx.closePath();
+      ctx.fill();
+    };
+    ctx.globalCompositeOperation = 'lighter';
+    const g2 = ctx.createLinearGradient(nx, ny, farX, farY);
+    g2.addColorStop(0, 'rgba(255,250,220,0.95)');
+    g2.addColorStop(0.3, 'rgba(255,190,80,0.8)');
+    g2.addColorStop(0.7, 'rgba(255,132,36,0.5)');
+    g2.addColorStop(1, 'rgba(255,86,20,0)');
+    cone(nw, fw, g2);
+    cone(nw * 0.6, fw * 0.45, 'rgba(255,246,206,0.55)');   // the hot core of the wash
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
 // Whatever the jet has set alight: tongues of fire licking up the body, and a
 // little smoke above it. Drawn after the entity itself so it reads as on top.
 function drawBurn(e) {
@@ -3161,6 +3390,7 @@ function drawEntities() {
     else if (e.type === 'enemy') drawEnemy(e);
     else if (e.type === 'knife') drawKnife(e);
     else if (e.type === 'relight') drawRelighter(e);
+    else if (e.type === 'torcher') drawTorcher(e);
     else if (e.type === 'energy') drawEnergyCell(e);
     else if (e.type === 'round') drawRound(e);
     else if (e.type === 'fire') drawFire(e);
@@ -5666,6 +5896,13 @@ window.__range = {
   },
   relightFire: relightFire,
   relightTarget: relightTarget,
+  // the men with the tanks, who come for you once a fire-setter goes down
+  torchers: function () {
+    return game.entities.filter(function (e) { return e.type === 'torcher'; });
+  },
+  spawnTorcher: spawnTorcher, summonTorchers: summonTorchers, drawTorcher: drawTorcher,
+  torchSpeed: TORCH_SPEED, torchRange: TORCH_RANGE, torchWindup: TORCH_WINDUP,
+  torchDamage: TORCH_DAMAGE, torchCooldown: TORCH_COOLDOWN, torchMax: TORCH_MAX,
   get knivesDone() { return game.knivesDone; },
   get burned() { return game.burned; },
   knifeMen: function () {
