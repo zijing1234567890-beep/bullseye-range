@@ -696,6 +696,10 @@ const KNIFE_WINDUP = 0.44;        // seconds the blade is up before the cut land
 const KNIFE_DAMAGE = [7, 13];     // health a cut takes off you
 const KNIFE_COOLDOWN = [1.0, 1.7];
 const KNIFE_MAX = 5;              // no more of them on the range at once than this
+const RELIGHT_SPEED = [1.9, 2.7]; // metres a second, hurrying to a drum that has gone out
+const RELIGHT_REACH = 2.4;        // ...and where he kneels to set it going again
+const RELIGHT_TIME = 2.0;         // seconds of coaxing before the drum catches light again
+const RELIGHT_MAX = 2;            // no more fire-setters on the range at once than this
 
 // The flamethrower: fuel in a canister rather than rounds, and a jet that sets
 // whatever it washes over alight. A body burns for a moment before it drops.
@@ -742,10 +746,12 @@ const game = {
   flagsNeeded: 0,
   enemiesNeeded: 0,
   knivesNeeded: 0,
+  relightsNeeded: 0,             // the men who set the drums going again
   targetsDone: 0,
   flagsDone: 0,
   enemiesDone: 0,
   knivesDone: 0,
+  relightsDone: 0,
   kills: 0,
   burned: 0,                     // things burned down by the flamethrower
   deflects: 0,
@@ -858,21 +864,24 @@ function spawnLevel(n) {
   const fn = 2 + Math.ceil(n / 2);
   const en = 1 + Math.ceil(n / 2);          // armed men on the range, also a quota
   const kn = Math.min(KNIFE_MAX, 1 + Math.floor(n / 2));   // ...and the ones with knives
+  const rn = Math.min(RELIGHT_MAX, 1 + Math.floor((n - 1) / 3));  // ...and the ones who relight drums
   game.targetsNeeded = tn;
   game.flagsNeeded = fn;
   game.enemiesNeeded = en;
   game.knivesNeeded = kn;
+  game.relightsNeeded = rn;
   game.targetsDone = 0;
   game.flagsDone = 0;
   game.enemiesDone = 0;
   game.knivesDone = 0;
+  game.relightsDone = 0;
   game.levelTime = 0;
   if (perkOn('fieldkit')) {        // the one perk that pays out before the first shot
     game.hp = MAX_HP;
     game.medKits += 2;
   }
 
-  const total = tn + 2 + fn + 1 + en + kn;
+  const total = tn + 2 + fn + 1 + en + kn + rn;
   const spread = Math.min(Math.PI * 1.24, Math.PI * 0.52 + n * 0.075);
   const minR = 13 + n * 0.7;
   const maxR = Math.min(58, minR + 22 + n * 1.4);
@@ -889,6 +898,7 @@ function spawnLevel(n) {
   for (let i = 0; i < fn + 1; i++) kinds.push('flag');
   for (let i = 0; i < en; i++) kinds.push('enemy');
   for (let i = 0; i < kn; i++) kinds.push('knife');
+  for (let i = 0; i < rn; i++) kinds.push('relight');
   for (let i = kinds.length - 1; i > 0; i--) {
     const j = randInt(0, i);
     const t = kinds[i]; kinds[i] = kinds[j]; kinds[j] = t;
@@ -921,6 +931,20 @@ function spawnLevel(n) {
         state: 'alive', t: 0, drop: 0, alpha: 1,
         speed: rand(KNIFE_SPEED[0], KNIFE_SPEED[1]),
         stride: rand(0, TAU), swing: 0, cool: rand(0.5, 1.4),
+        burn: 0, burnFrom: 0, choke: 0, ember: rand(0, TAU),
+        jacket: randInt(0, 3)
+      });
+      return;
+    }
+    if (kind === 'relight') {
+      // a can of fuel and a torch, and no interest in you at all: he walks to a
+      // drum that has gone out and sets it going again
+      ents.push({
+        type: 'relight', x: x, z: z, hx: x, hz: z,
+        h: 1.76, r: 0.38,
+        state: 'alive', t: 0, drop: 0, alpha: 1,
+        speed: rand(RELIGHT_SPEED[0], RELIGHT_SPEED[1]),
+        stride: rand(0, TAU), torch: 0, igniting: 0, fire: null,
         burn: 0, burnFrom: 0, choke: 0, ember: rand(0, TAU),
         jacket: randInt(0, 3)
       });
@@ -997,6 +1021,11 @@ function spawnLevel(n) {
 }
 
 /* ---------------- entity simulation ---------------- */
+// Every walking man on the range: the shooters, the knife men and the fire-setters.
+function isMan(e) {
+  return e.type === 'enemy' || e.type === 'knife' || e.type === 'relight';
+}
+
 function updateEntities(dt) {
   for (let i = game.entities.length - 1; i >= 0; i--) {
     const e = game.entities[i];
@@ -1078,6 +1107,30 @@ function updateEntities(dt) {
         if (e.cool <= 0 && d <= KNIFE_REACH + 0.45) { e.swing = 0.0001; Sound.knife(); }
       }
     }
+    if (e.state === 'alive' && e.type === 'relight' && !ablaze) {
+      // He has no interest in you at all: he walks to a drum that has gone out,
+      // kneels at it, and sets it going again. Kill him first, or the fires never stay down.
+      const f = relightTarget(e);
+      if (f) {
+        const dx = f.x - e.x, dz = f.z - e.z;
+        const d = Math.hypot(dx, dz) || 0.001;
+        if (d > RELIGHT_REACH) {
+          const step = Math.min(d - RELIGHT_REACH, e.speed * dt);
+          e.x += (dx / d) * step;
+          e.z += (dz / d) * step;
+        }
+        e.hx = e.x; e.hz = e.z;
+        e.stride += dt * (3.0 + e.speed * 1.4);
+        if (f.state === 'out' && d <= RELIGHT_REACH + 0.5) {
+          e.igniting += dt;
+          e.torch = Math.min(1, e.torch + dt * 2.4);
+          if (e.igniting >= RELIGHT_TIME) { e.igniting = 0; relightFire(f); }
+        } else {
+          e.igniting = Math.max(0, e.igniting - dt * 2);
+          e.torch = Math.max(0.2, e.torch - dt * 1.6);
+        }
+      }
+    }
     if (e.state === 'alive' && e.burn > 0) {         // set alight by the flamethrower
       e.burn += dt;
       e.swing = 0; e.aim = 0;                        // fire puts the fight out of them
@@ -1086,7 +1139,7 @@ function updateEntities(dt) {
     }
     if (e.state === 'dying') {
       e.t += dt;
-      if (e.type === 'enemy' || e.type === 'knife') {
+      if (isMan(e)) {
         const d = Math.min(1, e.t / 1.25);
         e.drop = easeInQuad(d);
         e.alpha = d < 0.6 ? 1 : 1 - (d - 0.6) / 0.4;
@@ -1572,7 +1625,7 @@ function hitTest(e) {
     if (Math.hypot(cross.x - f.x, cross.y - f.y) > f.radius * 1.04) return null;
     return { x: cross.x, y: cross.y, depth: f.depth };
   }
-  if (e.type === 'enemy' || e.type === 'knife') {
+  if (isMan(e)) {
     const f = enemyFace(e);
     if (!f) return null;
     if (cross.x < f.x - f.halfW || cross.x > f.x + f.halfW) return null;
@@ -1619,7 +1672,7 @@ function entityAnchor(e) {
     const f = targetFace(e);
     return f ? { x: f.x, y: f.y, k: f.k, rad: f.radius } : null;
   }
-  if (e.type === 'enemy' || e.type === 'knife') {
+  if (isMan(e)) {
     const f = enemyFace(e);
     return f ? { x: f.x, y: (f.top + f.bot) * 0.5, k: f.k, rad: Math.max(f.halfW, (f.bot - f.top) * 0.5) } : null;
   }
@@ -1634,7 +1687,7 @@ function entityAnchor(e) {
 // How far the crosshair sits from a body on screen: 0 when it is on it. Measured
 // to the body's box, not its centre, so a wide flag still catches the jet.
 function flameDistance(e) {
-  if (e.type === 'enemy' || e.type === 'knife') {
+  if (isMan(e)) {
     const f = enemyFace(e);
     if (!f) return Infinity;
     const dx = Math.max(0, Math.abs(cross.x - f.x) - f.halfW * 1.25);
@@ -1742,6 +1795,36 @@ function douse(f, a) {
   return true;
 }
 
+// ---------------- the men who set the drums going again ----------------
+// Which drum he makes for: one that has gone out, otherwise the nearest one still
+// burning, where he waits for you to put it out.
+function relightTarget(e) {
+  let out = null, outD = Infinity, lit = null, litD = Infinity;
+  for (let i = 0; i < game.fires.length; i++) {
+    const f = game.fires[i];
+    const d = Math.hypot(f.x - e.x, f.z - e.z);
+    if (f.state === 'out') { if (d < outD) { outD = d; out = f; } }
+    else if (d < litD) { litD = d; lit = f; }
+  }
+  return out || lit;
+}
+
+// He gets the drum going again: the foam is gone, the flames are back, and the
+// Fires count goes back down with it.
+function relightFire(f) {
+  if (!f || f.state !== 'out') return;
+  f.state = 'burning';
+  f.douse = 0;
+  f.outAt = 0;
+  f.t = 0;
+  game.firesDone = Math.max(0, game.firesDone - 1);
+  game.pops.push({ x: f.x, y: 1.9, z: f.z, text: 'RELIT', life: 1.2, max: 1.2, color: '#ff8a5c' });
+  const a = fireAnchor(f);
+  if (a) { burst(a.x, a.y - a.k * 0.55, '#ffb03a', 18, 240); burst(a.x, a.y - a.k * 0.55, '#ffe9a8', 10, 180); }
+  Sound.crack();
+  updateHud();
+}
+
 // One squirt: the nearest fire under the crosshair goes down a little, and a shooter
 // in the blast comes away coughing foam, his aim gone for a moment.
 function sprayFoam() {
@@ -1756,7 +1839,7 @@ function sprayFoam() {
   const caught = coneTargets(CHOKE_RANGE, FOAM_TOL);
   for (let i = 0; i < caught.length; i++) {
     const e = caught[i].e;
-    if (e.type !== 'enemy' && e.type !== 'knife') continue;
+    if (!isMan(e)) continue;
     if (e.choke === undefined) e.choke = 0;
     if (e.choke < CHOKE_TIME) {
       const a = caught[i].a;
@@ -1801,8 +1884,10 @@ function applyHit(found) {
   e.state = 'dying';
   e.t = 0;
 
-  if (e.type === 'enemy' || e.type === 'knife') {   // a man, not a target: he stays down for good
-    if (e.type === 'enemy') game.enemiesDone++; else game.knivesDone++;
+  if (isMan(e)) {                                   // a man, not a target: he stays down for good
+    if (e.type === 'enemy') game.enemiesDone++;
+    else if (e.type === 'knife') game.knivesDone++;
+    else game.relightsDone++;
     game.kills++;
     const head = !!found.hit.head;
     const pts = (head ? 250 : 150) + (found.flame ? FLAME_SCORCH : 0);
@@ -1856,6 +1941,7 @@ function maybeComplete() {
       game.flagsDone >= game.flagsNeeded &&
       game.enemiesDone >= game.enemiesNeeded &&
       game.knivesDone >= game.knivesNeeded &&
+      game.relightsDone >= game.relightsNeeded &&
       game.firesDone >= game.firesNeeded) completeLevel();
 }
 
@@ -1876,7 +1962,7 @@ function slash() {
   let best = null, bestDepth = Infinity;
   for (let i = 0; i < game.entities.length; i++) {
     const e = game.entities[i];
-    if (e.state !== 'alive' || (e.type !== 'enemy' && e.type !== 'knife')) continue;
+    if (e.state !== 'alive' || !isMan(e)) continue;
     const d = depthOf(e.hx, e.hz);
     if (d <= 0.4 || d > w.reach) continue;
     const p = project(e.hx, 1.0, e.hz);
@@ -2618,6 +2704,123 @@ function drawKnife(e) {
   ctx.globalAlpha = 1;
 }
 
+
+// The man with the fuel can: a coverall, a visor, a can in one hand and a torch in
+// the other. He crouches over the drum while he coaxes it back, and the torch
+// flares as it catches.
+function drawRelighter(e) {
+  const f = enemyFace(e);
+  if (!f) return;
+  const k = f.k;
+  const live = e.state === 'alive';
+  const step = Math.sin(e.stride);
+  const crouch = live ? clamp(e.igniting / RELIGHT_TIME, 0, 1) : 0;
+  const bob = -crouch * k * 0.22;
+
+  ctx.save();
+  ctx.globalAlpha = e.alpha;
+  ctx.translate(f.x, f.bot);
+  if (e.drop > 0) ctx.rotate(e.drop * 1.15);
+
+  ctx.fillStyle = 'rgba(40, 34, 26, 0.42)';
+  ctx.beginPath();
+  ctx.ellipse(0, 0, k * 0.44, k * 0.11, 0, 0, TAU);
+  ctx.fill();
+
+  // legs
+  ctx.fillStyle = '#3c3f45';
+  ctx.save();
+  ctx.translate(-0.13 * k, -0.92 * k);
+  ctx.rotate(step * (live ? 0.28 : 0));
+  rrect(-0.1 * k, 0, 0.2 * k, 0.9 * k, 0.06 * k); ctx.fill();
+  ctx.fillStyle = '#22252a';
+  rrect(-0.13 * k, 0.83 * k, 0.26 * k, 0.07 * k, 0.03 * k); ctx.fill();
+  ctx.restore();
+  ctx.save();
+  ctx.translate(0.13 * k, -0.92 * k - crouch * k * 0.18);
+  ctx.rotate(-step * (live ? 0.28 : 0));
+  ctx.fillStyle = '#3c3f45';
+  rrect(-0.1 * k, 0, 0.2 * k, 0.9 * k, 0.06 * k); ctx.fill();
+  ctx.fillStyle = '#22252a';
+  rrect(-0.13 * k, 0.83 * k, 0.26 * k, 0.07 * k, 0.03 * k); ctx.fill();
+  ctx.restore();
+
+  // coverall, high-vis bands so he reads as range crew
+  ctx.fillStyle = '#4c5259';
+  rrect(-0.28 * k, -1.62 * k + bob, 0.56 * k, 0.74 * k, 0.11 * k); ctx.fill();
+  ctx.fillStyle = 'rgba(255,196,64,0.85)';
+  rrect(-0.28 * k, -1.42 * k + bob, 0.56 * k, 0.075 * k, 0.03 * k); ctx.fill();
+  rrect(-0.28 * k, -1.18 * k + bob, 0.56 * k, 0.075 * k, 0.03 * k); ctx.fill();
+
+  // head and a face shield
+  ctx.fillStyle = SKIN_B;
+  ctx.beginPath();
+  ctx.arc(0, -1.73 * k + bob, 0.135 * k, 0, TAU);
+  ctx.fill();
+  ctx.fillStyle = '#e9b23a';
+  ctx.beginPath();
+  ctx.arc(0, -1.75 * k + bob, 0.155 * k, Math.PI, TAU);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(190,226,240,0.75)';
+  rrect(-0.12 * k, -1.76 * k + bob, 0.24 * k, 0.07 * k, 0.03 * k); ctx.fill();
+
+  // the fuel can, hanging from one hand
+  const canX = -0.36 * k, canY = -0.78 * k + bob;
+  ctx.strokeStyle = '#4c5259';
+  ctx.lineWidth = Math.max(1.4, k * 0.09);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(-0.22 * k, -1.5 * k + bob);
+  ctx.quadraticCurveTo(-0.34 * k, -1.1 * k, canX, canY - 0.16 * k);
+  ctx.stroke();
+  ctx.fillStyle = '#c4452c';
+  rrect(canX - 0.15 * k, canY, 0.3 * k, 0.34 * k, 0.05 * k); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.28)';
+  rrect(canX - 0.11 * k, canY + 0.06 * k, 0.06 * k, 0.2 * k, 0.02 * k); ctx.fill();
+  ctx.fillStyle = '#8d2f1e';
+  rrect(canX - 0.05 * k, canY - 0.05 * k, 0.1 * k, 0.06 * k, 0.02 * k); ctx.fill();
+
+  // the torch arm, reaching down at the drum
+  const reach = live ? 0.1 + crouch * 0.5 : 0;
+  const tx = 0.34 * k + reach * 0.5 * k, ty = -1.0 * k + reach * 0.8 * k + bob;
+  ctx.strokeStyle = '#4c5259';
+  ctx.beginPath();
+  ctx.moveTo(0.22 * k, -1.48 * k + bob);
+  ctx.quadraticCurveTo(0.36 * k, -1.2 * k + bob, tx, ty);
+  ctx.stroke();
+
+  // torch, then its little flame (bigger while he is lighting the drum)
+  ctx.strokeStyle = '#20242a';
+  ctx.lineWidth = Math.max(2, k * 0.07);
+  ctx.beginPath();
+  ctx.moveTo(tx, ty);
+  ctx.lineTo(tx + 0.12 * k, ty - 0.16 * k);
+  ctx.stroke();
+  if (live) {
+    const flare = 0.45 + 0.55 * Math.max(crouch, e.torch);
+    const wob = Math.sin(game.time * 13 + e.ember) * 0.12;
+    const fl = k * (0.14 + 0.16 * flare);
+    ctx.globalCompositeOperation = 'lighter';
+    const g = ctx.createRadialGradient(tx + 0.14 * k, ty - 0.2 * k, 0, tx + 0.14 * k, ty - 0.2 * k, fl * 2.2);
+    g.addColorStop(0, 'rgba(255,246,206,0.95)');
+    g.addColorStop(0.45, 'rgba(255,150,48,0.6)');
+    g.addColorStop(1, 'rgba(255,110,30,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(tx + 0.14 * k, ty - 0.2 * k, fl * 2.2, 0, TAU);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,226,150,0.95)';
+    ctx.beginPath();
+    ctx.moveTo(tx + 0.14 * k, ty - 0.22 * k - fl);
+    ctx.quadraticCurveTo(tx + 0.28 * k + wob, ty - 0.2 * k, tx + 0.14 * k, ty - 0.2 * k + fl * 0.25);
+    ctx.quadraticCurveTo(tx + 0.02 * k, ty - 0.2 * k, tx + 0.14 * k, ty - 0.22 * k - fl);
+    ctx.fill();
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
 // Whatever the jet has set alight: tongues of fire licking up the body, and a
 // little smoke above it. Drawn after the entity itself so it reads as on top.
 function drawBurn(e) {
@@ -2828,7 +3031,7 @@ function drawFire(f) {
 // A choked man: foam clings to his face and chest, and he coughs it off.
 function drawChoke(e) {
   if (!(e.choke > 0)) return;
-  if (e.type !== 'enemy' && e.type !== 'knife') return;
+  if (!isMan(e)) return;
   const f = enemyFace(e);
   if (!f || !isFinite(f.x) || !isFinite(f.k)) return;
   const a = clamp(e.choke / CHOKE_TIME, 0, 1);
@@ -2957,6 +3160,7 @@ function drawEntities() {
     if (e.type === 'target') drawTarget(e);
     else if (e.type === 'enemy') drawEnemy(e);
     else if (e.type === 'knife') drawKnife(e);
+    else if (e.type === 'relight') drawRelighter(e);
     else if (e.type === 'energy') drawEnergyCell(e);
     else if (e.type === 'round') drawRound(e);
     else if (e.type === 'fire') drawFire(e);
@@ -4994,11 +5198,13 @@ const els = {
   flagProg: document.getElementById('flagProg'),
   enemyProg: document.getElementById('enemyProg'),
   knifeProg: document.getElementById('knifeProg'),
+  relightProg: document.getElementById('relightProg'),
   fireProg: document.getElementById('fireProg'),
   targetBar: document.getElementById('targetBar'),
   flagBar: document.getElementById('flagBar'),
   enemyBar: document.getElementById('enemyBar'),
   knifeBar: document.getElementById('knifeBar'),
+  relightBar: document.getElementById('relightBar'),
   fireBar: document.getElementById('fireBar'),
   score: document.getElementById('score'),
   acc: document.getElementById('acc'),
@@ -5039,6 +5245,7 @@ function updateHud() {
   setText(els.flagProg, game.flagsDone + ' / ' + game.flagsNeeded);
   setText(els.enemyProg, game.enemiesDone + ' / ' + game.enemiesNeeded);
   setText(els.knifeProg, game.knivesDone + ' / ' + game.knivesNeeded);
+  setText(els.relightProg, game.relightsDone + ' / ' + game.relightsNeeded);
   setText(els.fireProg, game.firesDone + ' / ' + game.firesNeeded);
   setText(els.score, fmt(game.score));
   setText(els.acc, game.shots ? Math.round(accuracy() * 100) + '%' : '—');
@@ -5059,6 +5266,7 @@ function updateHud() {
   if (els.flagBar) els.flagBar.style.width = (game.flagsNeeded ? clamp(game.flagsDone / game.flagsNeeded, 0, 1) * 100 : 0) + '%';
   if (els.enemyBar) els.enemyBar.style.width = (game.enemiesNeeded ? clamp(game.enemiesDone / game.enemiesNeeded, 0, 1) * 100 : 0) + '%';
   if (els.knifeBar) els.knifeBar.style.width = (game.knivesNeeded ? clamp(game.knivesDone / game.knivesNeeded, 0, 1) * 100 : 0) + '%';
+  if (els.relightBar) els.relightBar.style.width = (game.relightsNeeded ? clamp(game.relightsDone / game.relightsNeeded, 0, 1) * 100 : 0) + '%';
   if (els.fireBar) els.fireBar.style.width = (game.firesNeeded ? clamp(game.firesDone / game.firesNeeded, 0, 1) * 100 : 0) + '%';
   if (els.ammoBox) {
     els.ammoBox.classList.toggle('energy', w.energy === true);
@@ -5379,7 +5587,7 @@ window.__range = {
       const f = targetFace(e);
       return f ? { x: f.x, y: f.y } : null;
     }
-    if (e.type === 'enemy' || e.type === 'knife') {
+    if (isMan(e)) {
       const f = enemyFace(e);
       return f ? { x: f.x, y: f.bot - e.h * f.k * 0.62 } : null;   // chest height
     }
@@ -5451,6 +5659,13 @@ window.__range = {
   knifeReach: KNIFE_REACH, knifeWindup: KNIFE_WINDUP, knifeMax: KNIFE_MAX,
   knifeDamage: KNIFE_DAMAGE, knifeSpeed: KNIFE_SPEED, knifeCooldown: KNIFE_COOLDOWN,
   get knivesNeeded() { return game.knivesNeeded; },
+  get relightsNeeded() { return game.relightsNeeded; },
+  get relightsDone() { return game.relightsDone; },
+  relighters: function () {
+    return game.entities.filter(function (e) { return e.type === 'relight'; });
+  },
+  relightFire: relightFire,
+  relightTarget: relightTarget,
   get knivesDone() { return game.knivesDone; },
   get burned() { return game.burned; },
   knifeMen: function () {

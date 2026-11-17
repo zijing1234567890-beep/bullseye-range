@@ -46,7 +46,17 @@ right in front of you. Nothing else in the rack touches them: lead and flame onl
 them. Take the fire extinguisher (`8`) and hold the blast on a drum: the crosshair turns
 foam-blue while the blast is on one, the flames shrink back with every burst, and once it
 has had enough it hisses out for good (120 points, and the HUD's Fires row ticks over).
-The blast carries right across the range, so you can take them out from where you stand. A round is not over while a fire is still burning, so put
+The blast carries right across the range, so you can take them out from where you stand.
+
+Out there with the fires are **fire-setters**: men in grey coveralls with high-vis bands and
+a red fuel can, carrying a torch. They never shoot and they never come at you — they walk to
+any drum that has gone out, kneel, and set it going again (the Fires count goes back down
+with it). Put them down first: while a fire-setter is on his feet nothing stays out, so the
+round cannot end. The HUD has a Relighters row for them; kill them with anything in the rack,
+and the flamethrower deals with them like it deals with everyone else. Levels carry one of
+them at first and two from level four on.
+
+A round is not over while a fire is still burning, so put
 them all out to move on.
 
 ## Between levels
