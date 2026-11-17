@@ -43,9 +43,10 @@ and it runs.
 
 Every round there are drum fires burning out in the grass — one to four of them, never
 right in front of you. Nothing else in the rack touches them: lead and flame only feed
-them. Take the fire extinguisher (`8`) and hold the blast on a drum: foam breaks over the
-steel with every burst, and once it has had enough it hisses out for good (120 points, and
-the HUD's Fires row ticks over). A round is not over while a fire is still burning, so put
+them. Take the fire extinguisher (`8`) and hold the blast on a drum: the crosshair turns
+foam-blue while the blast is on one, the flames shrink back with every burst, and once it
+has had enough it hisses out for good (120 points, and the HUD's Fires row ticks over).
+The blast carries right across the range, so you can take them out from where you stand. A round is not over while a fire is still burning, so put
 them all out to move on.
 
 ## Between levels

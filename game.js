@@ -707,10 +707,11 @@ const FLAME_JET = 0.14;           // seconds the visible jet lingers after a squ
 // The extinguisher works like the flamethrower's jet in reverse: a wide blast of foam
 // that chokes a shooter instead of setting him alight, and the only thing that puts a
 // drum fire out.
-const FOAM_RANGE = 17;            // metres the blast carries
+const FOAM_RANGE = 34;            // metres the blast carries: far enough for any drum on the range
+const CHOKE_RANGE = 20;           // metres the foam washes over a man: shorter than the jet
 const FOAM_TOL = 0.72;            // how far off the crosshair a fire still catches (a wide mist)
 const FOAM_JET = 0.16;            // seconds the visible blast lingers after a squirt
-const FOAM_DOSE = 0.07;           // how much of a fire one blast puts down
+const FOAM_DOSE = 0.2;            // how much of a fire one blast puts down: five blasts kill it
 const FIRE_SCORE = 120;           // points for putting one out
 const CHOKE_TIME = 2.4;           // seconds a choked shooter is off his aim
 const FLAME_SCORCH = 60;          // points for burning something down
@@ -957,7 +958,7 @@ function spawnLevel(n) {
   let tries = 0;
   while (game.fires.length < fr && tries++ < 240) {
     const a = rand(-spread / 2, spread / 2) * 1.2;
-    const r = rand(Math.max(9, minR - 4), maxR + 4);
+    const r = rand(Math.max(9, minR - 4), Math.min(maxR + 4, 30));
     const fx = Math.sin(a) * r, fz = Math.cos(a) * r;
     if (fz < 6) continue;                                        // never in your lap
     let clear = true;
@@ -1745,10 +1746,14 @@ function douse(f, a) {
 // in the blast comes away coughing foam, his aim gone for a moment.
 function sprayFoam() {
   let any = false;
+  // a wide mist, not a nozzle: every drum under the blast takes foam, so two drums
+  // standing together go down together instead of one hiding the other
   const fires = fireTargets();
-  if (fires.length) any = douse(fires[0].f, fires[0].a) || true;
+  for (let i = 0; i < fires.length; i++) {
+    if (douse(fires[i].f, fires[i].a)) any = true;
+  }
 
-  const caught = coneTargets(FOAM_RANGE, FOAM_TOL);
+  const caught = coneTargets(CHOKE_RANGE, FOAM_TOL);
   for (let i = 0; i < caught.length; i++) {
     const e = caught[i].e;
     if (e.type !== 'enemy' && e.type !== 'knife') continue;
@@ -2754,19 +2759,21 @@ function drawFire(f) {
     return;
   }
 
-  // the light it throws on the grass
+  // the light it throws on the grass -- and the light the foam has taken out of it
+  const damp = 1 - f.douse * 0.72;
+  const glowR = bw * 3.4 * (0.6 + 0.4 * damp);
   ctx.globalCompositeOperation = 'lighter';
-  const glow = ctx.createRadialGradient(p.x, p.y - bh * 0.8, 0, p.x, p.y - bh * 0.8, bw * 3.4);
-  glow.addColorStop(0, 'rgba(255,150,60,0.34)');
-  glow.addColorStop(0.5, 'rgba(255,110,30,0.13)');
+  const glow = ctx.createRadialGradient(p.x, p.y - bh * 0.8, 0, p.x, p.y - bh * 0.8, glowR);
+  glow.addColorStop(0, 'rgba(255,150,60,' + (0.34 * damp).toFixed(3) + ')');
+  glow.addColorStop(0.5, 'rgba(255,110,30,' + (0.13 * damp).toFixed(3) + ')');
   glow.addColorStop(1, 'rgba(255,90,20,0)');
   ctx.fillStyle = glow;
   ctx.beginPath();
-  ctx.arc(p.x, p.y - bh * 0.8, bw * 3.4, 0, TAU);
+  ctx.arc(p.x, p.y - bh * 0.8, glowR, 0, TAU);
   ctx.fill();
 
   // the fire itself: tongues climbing off the open lid
-  const tall = k * (1.35 + 0.18 * Math.sin(t * 3.1));
+  const tall = k * (1.35 + 0.18 * Math.sin(t * 3.1)) * damp;
   const grad = ctx.createLinearGradient(0, p.y - bh, 0, p.y - bh - tall);
   grad.addColorStop(0, 'rgba(255,226,150,0.95)');
   grad.addColorStop(0.38, 'rgba(255,142,48,0.8)');
@@ -2786,10 +2793,10 @@ function drawFire(f) {
     ctx.fill();
   }
 
-  // a hot core right at the lid
-  ctx.fillStyle = 'rgba(255,248,214,0.55)';
+  // a hot core right at the lid, cooling under the foam
+  ctx.fillStyle = 'rgba(255,248,214,' + (0.12 + 0.43 * damp).toFixed(3) + ')';
   ctx.beginPath();
-  ctx.ellipse(p.x, baseY, bw * 0.72, Math.max(2, bw * 0.34), 0, 0, TAU);
+  ctx.ellipse(p.x, baseY, bw * 0.72 * (0.6 + 0.4 * damp), Math.max(2, bw * 0.34 * (0.6 + 0.4 * damp)), 0, 0, TAU);
   ctx.fill();
 
   // embers climbing away
@@ -3031,7 +3038,8 @@ function drawEffects() {
 function drawCrosshair() {
   const x = cross.x, y = cross.y;
   const aim = aimBlend();
-  const col = cross.hover ? '#ff6a5a' : 'rgba(255,255,255,0.92)';
+  const onFire = currentGun().ext && fireTargets().length > 0;
+  const col = onFire ? '#bfefff' : (cross.hover ? '#ff6a5a' : 'rgba(255,255,255,0.92)');
   ctx.save();
   ctx.strokeStyle = col;
   ctx.lineWidth = 2;
