@@ -58,8 +58,8 @@ them at first and two from level four on.
 
 Put one of them down and **the man with the tank** comes for you: two red cylinders on his
 back, a rubber apron, a mask and a nozzle held two-handed. He appears out past the drum his
-mate fell by and only starts walking then — and he walks *slowly* (under 1.2 m/s), so you
-have time to see him coming. Let him get within six metres and he stops and hoses you with
+mate fell by and only starts walking then — heavily, but no dawdling: 1.5-2 m/s, so you have
+a few seconds to see him coming and put him down. Let him get within six metres and he stops and hoses you with
 burning fuel for 10-17 damage a wash. He brings one mate at most; foam from the
 extinguisher holds him up and puts his pilot light out. He is a man like the rest otherwise:
 any gun or the flamethrower puts him down, and he counts toward no quota.

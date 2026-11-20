@@ -702,7 +702,7 @@ const RELIGHT_TIME = 2.0;         // seconds of coaxing before the drum catches 
 const RELIGHT_MAX = 2;            // no more fire-setters on the range at once than this
 // Put a fire-setter down and the man who tends the drums with him comes for you: slow,
 // heavy, and carrying a tank. He only starts walking when his mate goes down.
-const TORCH_SPEED = [0.8, 1.15];  // metres a second: the tank is heavy and he is in no hurry
+const TORCH_SPEED = [1.5, 2.0];   // metres a second: the tank slows him, but not that much
 const TORCH_RANGE = 6.0;          // how close he walks before the jet can reach you
 const TORCH_WINDUP = 1.0;         // the pilot light flares for this long before the wash
 const TORCH_DAMAGE = [10, 17];    // what one wash costs you
